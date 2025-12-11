@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Surge Audio Capture - Deepgram STT</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <div class="container">
+    <header>
+      <h1>🎙️ Surge Audio Capture System</h1>
+      <p class="subtitle">Capture microphone and speaker audio with Deepgram transcription</p>
+    </header>
+
+    <div class="config-section">
+      <div class="input-group">
+        <label for="apiKey">Deepgram API Key:</label>
+        <input type="password" id="apiKey" value="0107cf2f62345e007fbaf64e27bd7f4923c6a735"
+          placeholder="Enter your Deepgram API key">
+        <button id="saveKey">Save</button>
+      </div>
+    </div>
+
+    <div class="controls-section">
+      <div class="control-panel">
+        <div class="audio-source">
+          <h2>🎤 Microphone</h2>
+          <div class="status" id="micStatus">Not connected</div>
+          <div class="button-group">
+            <button id="startMic" class="btn btn-primary">Start Capture</button>
+            <button id="stopMic" class="btn btn-danger" disabled>Stop Capture</button>
+          </div>
+          <div class="transcript-box" id="micTranscript">
+            <div class="transcript-header">Microphone Transcript</div>
+            <div class="transcript-content" id="micTranscriptContent"></div>
+          </div>
+        </div>
+
+        <div class="audio-source">
+          <h2>🔊 Speaker / System Audio</h2>
+          <div class="status" id="speakerStatus">Not connected</div>
+          <div class="help-text" id="speakerHelp">
+            <small>
+              <strong>⚠️ IMPORTANT:</strong> When the sharing dialog appears:<br>
+              1. Select a screen or window<br>
+              2. <strong>✅ CHECK "Share audio" or "Share system audio"</strong><br>
+              3. Click "Share" or "Allow"<br>
+              <em>Without checking "Share audio", no audio will be captured!</em>
+            </small>
+          </div>
+          <div class="button-group">
+            <button id="startSpeaker" class="btn btn-primary">Start Capture</button>
+            <button id="stopSpeaker" class="btn btn-danger" disabled>Stop Capture</button>
+          </div>
+          <div class="transcript-box" id="speakerTranscript">
+            <div class="transcript-header">Speaker Transcript</div>
+            <div class="transcript-content" id="speakerTranscriptContent"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="info-section">
+      <div class="info-box">
+        <h3>ℹ️ Information</h3>
+        <ul>
+          <li><strong>Microphone:</strong> Captures audio from your default microphone input</li>
+          <li><strong>Speaker:</strong> Captures system audio output (requires permissions)</li>
+          <li><strong>Platform:</strong> <span id="platform"></span></li>
+          <li><strong>Status:</strong> <span id="connectionStatus">Ready</span></li>
+        </ul>
+      </div>
+
+      <div class="permissions-box" id="permissionsInfo">
+        <h3>🔒 System Audio Capture Requirements</h3>
+        <div id="permissionsContent">
+          <p><strong>Current Method:</strong> Uses browser screen sharing API</p>
+          <ul>
+            <li>✅ Works immediately, no setup required</li>
+            <li>⚠️ Requires screen sharing permission</li>
+            <li>⚠️ User must select audio source in browser dialog</li>
+          </ul>
+          <p><strong>For Production Use:</strong> Native modules recommended</p>
+          <ul>
+            <li><strong>macOS 13+:</strong> ScreenCaptureKit (one-time permission)</li>
+            <li><strong>macOS &lt;13:</strong> BlackHole virtual audio device</li>
+            <li><strong>Windows:</strong> WASAPI Loopback (zero setup)</li>
+          </ul>
+          <p class="note">See NATIVE_MODULE_NOTES.md for integration details</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="audioCapture.js"></script>
+  <script src="renderer.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+.env
+*.app
+*.dmg
+*.exe
+*.deb
+*.rpm
+package-lock.json
+temp_audio/audio_*

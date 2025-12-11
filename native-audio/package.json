@@ -1,0 +1,20 @@
+{
+  "name": "native-audio-capture",
+  "version": "1.0.0",
+  "description": "Native macOS audio capture using ScreenCaptureKit",
+  "main": "index.js",
+  "scripts": {
+    "install": "node-gyp rebuild",
+    "rebuild": "node-gyp rebuild",
+    "build-swift": "./build_swift.sh || echo 'Swift build skipped (requires full Xcode)'",
+    "build-with-swift": "npm run build-swift && node-gyp rebuild"
+  },
+  "gypfile": true,
+  "dependencies": {
+    "node-addon-api": "^7.0.0"
+  },
+  "devDependencies": {
+    "node-gyp": "^10.0.0"
+  }
+}
+
