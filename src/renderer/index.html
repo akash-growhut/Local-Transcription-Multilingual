@@ -4,34 +4,34 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Surge Audio Capture - Deepgram STT</title>
+  <title>Surge Audio Capture</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
-  <div class="background-orb orb-1"></div>
-  <div class="background-orb orb-2"></div>
   
   <div class="app-container">
     <header>
-      <div class="logo-container">
+      <div class="logo-section">
         <h1>🎙️ Surge Audio</h1>
-        <div class="status-pill" id="connectionStatus">Ready</div>
+        <p class="subtitle">Professional Audio Transcription</p>
       </div>
-      <p class="subtitle">Next-gen Audio Capture & Transcription</p>
+      <div class="status-pill" id="connectionStatus">
+        Ready
+      </div>
     </header>
 
     <main>
-      <div class="config-section glass-panel">
+      <div class="config-section">
         <div class="input-group">
           <label for="apiKey">Deepgram API Key</label>
           <div class="input-wrapper">
-            <input type="password" id="apiKey" value="0107cf2f62345e007fbaf64e27bd7f4923c6a735" placeholder="Enter your Deepgram API key">
+            <input type="password" id="apiKey" value="0107cf2f62345e007fbaf64e27bd7f4923c6a735" placeholder="sk-...">
             <button id="saveKey" class="btn-icon" title="Save Key">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
             </button>
           </div>
         </div>
@@ -39,88 +39,101 @@
 
       <div class="controls-grid">
         <!-- Microphone Section -->
-        <div class="audio-source glass-panel">
+        <div class="audio-source">
           <div class="panel-header">
-            <h2>Microphone</h2>
+            <h2>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+              Microphone
+            </h2>
             <div id="micStatus" class="status-badge">Ready</div>
           </div>
           
           <div class="button-group">
             <button id="startMic" class="btn btn-primary">
-              <span class="icon">●</span> Start Recording
+              Start Recording
             </button>
             <button id="stopMic" class="btn btn-danger" disabled>
-              <span class="icon">■</span> Stop
+              Stop
             </button>
           </div>
 
           <div class="transcript-box">
-            <div class="transcript-header">Live Transcript</div>
+            <div class="transcript-header">
+              <span>Live Transcript</span>
+              <span>Input 1</span>
+            </div>
             <div id="micTranscriptContent" class="transcript-content">
-              <div class="placeholder-text">Waiting for speech...</div>
+              <!-- Content injected via JS -->
             </div>
           </div>
         </div>
 
         <!-- Speaker Section -->
-        <div class="audio-source glass-panel">
+        <div class="audio-source">
           <div class="panel-header">
-            <h2>System Audio</h2>
+            <h2>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+              System Audio
+            </h2>
             <div id="speakerStatus" class="status-badge">Ready</div>
           </div>
 
           <div class="help-text" id="speakerHelp">
-            <small>Requires screen sharing permission to capture system audio.</small>
+            Requires screen sharing permission to capture system audio.
           </div>
           
           <div class="button-group">
             <button id="startSpeaker" class="btn btn-primary">
-              <span class="icon">●</span> Start Capture
+              Start Capture
             </button>
             <button id="stopSpeaker" class="btn btn-danger" disabled>
-              <span class="icon">■</span> Stop
+              Stop
             </button>
           </div>
 
           <div class="transcript-box">
-            <div class="transcript-header">System Transcript</div>
+            <div class="transcript-header">
+              <span>System Transcript</span>
+              <span>Output</span>
+            </div>
             <div id="speakerTranscriptContent" class="transcript-content">
-              <div class="placeholder-text">Waiting for audio...</div>
+              <!-- Content injected via JS -->
             </div>
           </div>
         </div>
       </div>
 
       <div class="info-grid">
-        <div class="info-box glass-panel">
-          <h3>Information</h3>
+        <div class="info-box">
+          <h3>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            System Info
+          </h3>
           <ul class="info-list">
             <li>
-              <span class="label">Platform</span>
-              <span class="value" id="platform">Loading...</span>
+              <span>Platform</span>
+              <span id="platform" style="color: var(--text-primary); font-weight: 500;">...</span>
             </li>
             <li>
-              <span class="label">Microphone</span>
-              <span class="value">Default Input</span>
+              <span>Mic Source</span>
+              <span>Default</span>
             </li>
             <li>
-              <span class="label">Speaker</span>
-              <span class="value">System Output</span>
+              <span>Sys Source</span>
+              <span>Loopback</span>
             </li>
           </ul>
         </div>
 
-        <div class="permissions-box glass-panel" id="permissionsInfo">
-          <h3>System Audio Requirements</h3>
-          <div id="permissionsContent">
+        <div class="permissions-box" id="permissionsInfo">
+          <h3>Configuration Guide</h3>
+          <div id="permissionsContent" class="permissions-content">
             <!-- Content populated by JS -->
           </div>
         </div>
       </div>
     </main>
   </div>
-
-  <div id="toast-container"></div>
 
   <script src="audioCapture.js"></script>
   <script src="renderer.js"></script>
