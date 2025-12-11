@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer } = require("electron");
+const { app, BrowserWindow, ipcMain, desktopCapturer, systemPreferences } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { exec } = require("child_process");
@@ -263,10 +263,14 @@ function createMicrophoneConnection(apiKey, onTranscript) {
   });
 
   connection.on("results", (data) => {
+    console.log("🎤 Microphone results event:", JSON.stringify(data, null, 2));
     const transcript = data.channel?.alternatives?.[0]?.transcript;
     if (transcript) {
       const isFinal = data.is_final;
+      console.log(`🎤 Microphone transcript (${isFinal ? "FINAL" : "partial"}): "${transcript}"`);
       onTranscript(transcript, isFinal, "microphone");
+    } else {
+      console.log("🎤 Microphone results but no transcript. Duration:", data.duration, "Speech final:", data.speech_final);
     }
   });
 
@@ -370,6 +374,32 @@ function createWindow() {
       webSecurity: true,
     },
   });
+
+  // Handle permission requests from renderer (microphone, camera, etc.)
+  mainWindow.webContents.session.setPermissionRequestHandler(
+    (webContents, permission, callback) => {
+      console.log(`🔐 Permission requested: ${permission}`);
+      // Allow microphone and media permissions
+      if (permission === "media" || permission === "microphone" || permission === "audio") {
+        console.log(`✅ Granting ${permission} permission`);
+        callback(true);
+      } else {
+        callback(true); // Allow other permissions too
+      }
+    }
+  );
+
+  // Handle permission check (for getUserMedia)
+  mainWindow.webContents.session.setPermissionCheckHandler(
+    (webContents, permission, requestingOrigin, details) => {
+      console.log(`🔐 Permission check: ${permission}, mediaType: ${details?.mediaType}`);
+      // Allow all media permissions
+      if (permission === "media" || details?.mediaType === "audio") {
+        return true;
+      }
+      return true;
+    }
+  );
 
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 
@@ -570,6 +600,7 @@ ipcMain.handle("stop-speaker-capture", async () => {
   return { success: false, error: "No active speaker connection" };
 });
 
+let micSendCount = 0;
 ipcMain.handle("send-audio-data", async (event, audioData, source) => {
   try {
     const connection =
@@ -577,11 +608,22 @@ ipcMain.handle("send-audio-data", async (event, audioData, source) => {
     if (connection) {
       // Convert ArrayBuffer to Buffer for Node.js
       const buffer = Buffer.from(audioData);
+      
+      // Log microphone audio being sent
+      if (source === "microphone") {
+        micSendCount++;
+        if (micSendCount <= 5) {
+          console.log(`🎤 Sending mic audio chunk ${micSendCount}, size=${buffer.length} bytes`);
+        }
+      }
+      
       connection.send(buffer);
       return { success: true };
     }
+    console.log(`⚠️ ${source} connection not ready`);
     return { success: false, error: "Connection not ready" };
   } catch (error) {
+    console.error(`❌ Error sending ${source} audio:`, error.message);
     return { success: false, error: error.message };
   }
 });
@@ -600,7 +642,19 @@ ipcMain.handle("get-desktop-sources", async (event, options = {}) => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Request microphone permission on macOS
+  if (process.platform === "darwin") {
+    const micStatus = systemPreferences.getMediaAccessStatus("microphone");
+    console.log(`🎤 Microphone permission status: ${micStatus}`);
+    
+    if (micStatus !== "granted") {
+      console.log("🎤 Requesting microphone permission...");
+      const granted = await systemPreferences.askForMediaAccess("microphone");
+      console.log(`🎤 Microphone permission ${granted ? "granted" : "denied"}`);
+    }
+  }
+  
   createWindow();
 
   app.on("activate", () => {

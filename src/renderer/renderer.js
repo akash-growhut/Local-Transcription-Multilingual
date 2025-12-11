@@ -157,6 +157,8 @@ async function startMicrophone() {
   }
 
   try {
+    console.log("🎤 Starting microphone capture...");
+    
     // Start Deepgram connection
     const result = await window.electronAPI.startMicrophoneCapture(
       deepgramApiKey
@@ -165,14 +167,21 @@ async function startMicrophone() {
       alert(`Error starting microphone capture: ${result.error}`);
       return;
     }
+    console.log("🎤 Deepgram connection created");
 
     // Start audio capture
+    let micCallbackCount = 0;
     const audioResult = await audioCapture.startMicrophoneCapture(
       (audioData, source) => {
+        micCallbackCount++;
+        if (micCallbackCount <= 5) {
+          console.log(`🎤 Mic callback ${micCallbackCount}: sending ${audioData.byteLength} bytes`);
+        }
         // Send audio data to Deepgram via main process
         window.electronAPI.sendAudioData(audioData, source);
       }
     );
+    console.log("🎤 Audio capture result:", audioResult);
 
     if (audioResult.success) {
       updateStatus("micStatus", "Recording...", "recording");

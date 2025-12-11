@@ -15,6 +15,7 @@ class AudioCapture {
   // Start microphone capture
   async startMicrophoneCapture(onAudioData) {
     try {
+      console.log('🎤 Requesting microphone access...');
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -23,21 +24,41 @@ class AudioCapture {
           noiseSuppression: true,
         },
       });
+      console.log('🎤 Microphone stream obtained:', stream.getAudioTracks().length, 'audio tracks');
 
       this.microphoneStream = stream;
       this.microphoneContext = new AudioContext({ sampleRate: 16000 });
+      
+      // Resume AudioContext if it's suspended (required by some browsers)
+      if (this.microphoneContext.state === 'suspended') {
+        console.log('🎤 Resuming suspended AudioContext...');
+        await this.microphoneContext.resume();
+      }
+      console.log('🎤 AudioContext state:', this.microphoneContext.state, 'sampleRate:', this.microphoneContext.sampleRate);
+      
       const source = this.microphoneContext.createMediaStreamSource(stream);
 
       // Create a script processor to capture audio data
       this.microphoneProcessor = this.microphoneContext.createScriptProcessor(4096, 1, 1);
       
+      let micSampleCount = 0;
       this.microphoneProcessor.onaudioprocess = (e) => {
         if (this.isMicrophoneCapturing) {
           const inputData = e.inputBuffer.getChannelData(0);
+          
+          // Log first few samples for debugging
+          if (micSampleCount < 5) {
+            const hasAudio = inputData.some(sample => Math.abs(sample) > 0.001);
+            const maxVal = Math.max(...Array.from(inputData.slice(0, 100)).map(Math.abs));
+            console.log(`🎤 Mic audio sample ${micSampleCount}: ${inputData.length} samples, hasAudio: ${hasAudio}, maxAbs: ${maxVal.toFixed(6)}`);
+            micSampleCount++;
+          }
+          
           // Convert Float32Array to Int16Array for Deepgram
           const int16Data = this.floatTo16BitPCM(inputData);
-          // Convert to Uint8Array for better IPC compatibility
-          const uint8Data = new Uint8Array(int16Data);
+          // Convert Int16Array to Uint8Array bytes (not element-wise conversion!)
+          // We need the raw bytes of the Int16Array, not truncated values
+          const uint8Data = new Uint8Array(int16Data.buffer);
           onAudioData(uint8Data.buffer, 'microphone');
         }
       };
@@ -45,10 +66,12 @@ class AudioCapture {
       source.connect(this.microphoneProcessor);
       this.microphoneProcessor.connect(this.microphoneContext.destination);
       this.isMicrophoneCapturing = true;
+      
+      console.log('🎤 Microphone capture started successfully');
 
       return { success: true };
     } catch (error) {
-      console.error('Microphone capture error:', error);
+      console.error('🎤 Microphone capture error:', error);
       return { success: false, error: error.message };
     }
   }
@@ -232,8 +255,9 @@ class AudioCapture {
           }
           
           const int16Data = this.floatTo16BitPCM(inputData);
-          // Convert to Uint8Array for better IPC compatibility
-          const uint8Data = new Uint8Array(int16Data);
+          // Convert Int16Array to Uint8Array bytes (not element-wise conversion!)
+          // We need the raw bytes of the Int16Array, not truncated values
+          const uint8Data = new Uint8Array(int16Data.buffer);
           onAudioData(uint8Data.buffer, 'speaker');
         }
       };
