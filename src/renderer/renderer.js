@@ -114,6 +114,13 @@ function setupEventListeners() {
   });
 }
 
+function updateStatus(elementId, text, className) {
+  const element = document.getElementById(elementId);
+  element.textContent = text;
+  // Preserve base class 'status-badge'
+  element.className = "status-badge " + className;
+}
+
 function saveApiKey() {
   const apiKey = document.getElementById("apiKey").value.trim();
   if (!apiKey) {
@@ -468,12 +475,6 @@ function displayTranscript(text, isFinal, source, eventData = null) {
   }
 }
 
-function updateStatus(elementId, text, className) {
-  const element = document.getElementById(elementId);
-  element.textContent = text;
-  element.className = "status " + className;
-}
-
 function updatePlatformInfo() {
   const platform = navigator.platform || "Unknown";
   const platformText = platform.includes("Mac")
@@ -501,9 +502,7 @@ function updatePlatformInfo() {
           <small>⚠️ <strong>System audio capture not supported:</strong> ${support.message}<br>
           💡 For production use, integrate native modules (see NATIVE_MODULE_NOTES.md)</small>
         `;
-        speakerHelp.style.background = "#ffebee";
-        speakerHelp.style.borderLeftColor = "#f44336";
-        speakerHelp.style.color = "#c62828";
+        speakerHelp.classList.add("error-message");
       }
     }
   }
@@ -524,10 +523,10 @@ function updatePlatformInfo() {
 
     if (micConnected || speakerConnected) {
       document.getElementById("connectionStatus").textContent = "Active";
-      document.getElementById("connectionStatus").style.color = "#4caf50";
+      document.getElementById("connectionStatus").classList.add("active");
     } else {
       document.getElementById("connectionStatus").textContent = "Ready";
-      document.getElementById("connectionStatus").style.color = "#666";
+      document.getElementById("connectionStatus").classList.remove("active");
     }
   };
 
@@ -550,10 +549,10 @@ function updatePermissionsInfo(platform) {
       <p><strong>Recommended for Production:</strong></p>
       <ul>
         <li><strong>macOS 13+:</strong> ScreenCaptureKit native module</li>
-        <li style="margin-left: 20px;">→ One-time screen recording permission</li>
-        <li style="margin-left: 20px;">→ Silent, automatic capture</li>
+        <li class="nested-item">→ One-time screen recording permission</li>
+        <li class="nested-item">→ Silent, automatic capture</li>
         <li><strong>macOS &lt;13:</strong> BlackHole virtual audio device</li>
-        <li style="margin-left: 20px;">→ Requires BlackHole installation</li>
+        <li class="nested-item">→ Requires BlackHole installation</li>
       </ul>
       <p class="note">📖 See NATIVE_MODULE_NOTES.md for integration guide</p>
     `;
@@ -568,9 +567,9 @@ function updatePermissionsInfo(platform) {
       <p><strong>Recommended for Production:</strong></p>
       <ul>
         <li><strong>WASAPI Loopback:</strong> Native module</li>
-        <li style="margin-left: 20px;">→ Zero setup required</li>
-        <li style="margin-left: 20px;">→ Silent, automatic system audio capture</li>
-        <li style="margin-left: 20px;">→ Captures all system audio</li>
+        <li class="nested-item">→ Zero setup required</li>
+        <li class="nested-item">→ Silent, automatic system audio capture</li>
+        <li class="nested-item">→ Captures all system audio</li>
       </ul>
       <p class="note">📖 See NATIVE_MODULE_NOTES.md for integration guide</p>
     `;

@@ -5,95 +5,122 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Surge Audio Capture - Deepgram STT</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
-  <div class="container">
+  <div class="background-orb orb-1"></div>
+  <div class="background-orb orb-2"></div>
+  
+  <div class="app-container">
     <header>
-      <h1>🎙️ Surge Audio Capture System</h1>
-      <p class="subtitle">Capture microphone and speaker audio with Deepgram transcription</p>
+      <div class="logo-container">
+        <h1>🎙️ Surge Audio</h1>
+        <div class="status-pill" id="connectionStatus">Ready</div>
+      </div>
+      <p class="subtitle">Next-gen Audio Capture & Transcription</p>
     </header>
 
-    <div class="config-section">
-      <div class="input-group">
-        <label for="apiKey">Deepgram API Key:</label>
-        <input type="password" id="apiKey" value="0107cf2f62345e007fbaf64e27bd7f4923c6a735"
-          placeholder="Enter your Deepgram API key">
-        <button id="saveKey">Save</button>
-      </div>
-    </div>
-
-    <div class="controls-section">
-      <div class="control-panel">
-        <div class="audio-source">
-          <h2>🎤 Microphone</h2>
-          <div class="status" id="micStatus">Not connected</div>
-          <div class="button-group">
-            <button id="startMic" class="btn btn-primary">Start Capture</button>
-            <button id="stopMic" class="btn btn-danger" disabled>Stop Capture</button>
+    <main>
+      <div class="config-section glass-panel">
+        <div class="input-group">
+          <label for="apiKey">Deepgram API Key</label>
+          <div class="input-wrapper">
+            <input type="password" id="apiKey" value="0107cf2f62345e007fbaf64e27bd7f4923c6a735" placeholder="Enter your Deepgram API key">
+            <button id="saveKey" class="btn-icon" title="Save Key">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+            </button>
           </div>
-          <div class="transcript-box" id="micTranscript">
-            <div class="transcript-header">Microphone Transcript</div>
-            <div class="transcript-content" id="micTranscriptContent"></div>
+        </div>
+      </div>
+
+      <div class="controls-grid">
+        <!-- Microphone Section -->
+        <div class="audio-source glass-panel">
+          <div class="panel-header">
+            <h2>Microphone</h2>
+            <div id="micStatus" class="status-badge">Ready</div>
+          </div>
+          
+          <div class="button-group">
+            <button id="startMic" class="btn btn-primary">
+              <span class="icon">●</span> Start Recording
+            </button>
+            <button id="stopMic" class="btn btn-danger" disabled>
+              <span class="icon">■</span> Stop
+            </button>
+          </div>
+
+          <div class="transcript-box">
+            <div class="transcript-header">Live Transcript</div>
+            <div id="micTranscriptContent" class="transcript-content">
+              <div class="placeholder-text">Waiting for speech...</div>
+            </div>
           </div>
         </div>
 
-        <div class="audio-source">
-          <h2>🔊 Speaker / System Audio</h2>
-          <div class="status" id="speakerStatus">Not connected</div>
+        <!-- Speaker Section -->
+        <div class="audio-source glass-panel">
+          <div class="panel-header">
+            <h2>System Audio</h2>
+            <div id="speakerStatus" class="status-badge">Ready</div>
+          </div>
+
           <div class="help-text" id="speakerHelp">
-            <small>
-              <strong>⚠️ IMPORTANT:</strong> When the sharing dialog appears:<br>
-              1. Select a screen or window<br>
-              2. <strong>✅ CHECK "Share audio" or "Share system audio"</strong><br>
-              3. Click "Share" or "Allow"<br>
-              <em>Without checking "Share audio", no audio will be captured!</em>
-            </small>
+            <small>Requires screen sharing permission to capture system audio.</small>
           </div>
+          
           <div class="button-group">
-            <button id="startSpeaker" class="btn btn-primary">Start Capture</button>
-            <button id="stopSpeaker" class="btn btn-danger" disabled>Stop Capture</button>
+            <button id="startSpeaker" class="btn btn-primary">
+              <span class="icon">●</span> Start Capture
+            </button>
+            <button id="stopSpeaker" class="btn btn-danger" disabled>
+              <span class="icon">■</span> Stop
+            </button>
           </div>
-          <div class="transcript-box" id="speakerTranscript">
-            <div class="transcript-header">Speaker Transcript</div>
-            <div class="transcript-content" id="speakerTranscriptContent"></div>
+
+          <div class="transcript-box">
+            <div class="transcript-header">System Transcript</div>
+            <div id="speakerTranscriptContent" class="transcript-content">
+              <div class="placeholder-text">Waiting for audio...</div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <div class="info-section">
-      <div class="info-box">
-        <h3>ℹ️ Information</h3>
-        <ul>
-          <li><strong>Microphone:</strong> Captures audio from your default microphone input</li>
-          <li><strong>Speaker:</strong> Captures system audio output (requires permissions)</li>
-          <li><strong>Platform:</strong> <span id="platform"></span></li>
-          <li><strong>Status:</strong> <span id="connectionStatus">Ready</span></li>
-        </ul>
-      </div>
+      <div class="info-grid">
+        <div class="info-box glass-panel">
+          <h3>Information</h3>
+          <ul class="info-list">
+            <li>
+              <span class="label">Platform</span>
+              <span class="value" id="platform">Loading...</span>
+            </li>
+            <li>
+              <span class="label">Microphone</span>
+              <span class="value">Default Input</span>
+            </li>
+            <li>
+              <span class="label">Speaker</span>
+              <span class="value">System Output</span>
+            </li>
+          </ul>
+        </div>
 
-      <div class="permissions-box" id="permissionsInfo">
-        <h3>🔒 System Audio Capture Requirements</h3>
-        <div id="permissionsContent">
-          <p><strong>Current Method:</strong> Uses browser screen sharing API</p>
-          <ul>
-            <li>✅ Works immediately, no setup required</li>
-            <li>⚠️ Requires screen sharing permission</li>
-            <li>⚠️ User must select audio source in browser dialog</li>
-          </ul>
-          <p><strong>For Production Use:</strong> Native modules recommended</p>
-          <ul>
-            <li><strong>macOS 13+:</strong> ScreenCaptureKit (one-time permission)</li>
-            <li><strong>macOS &lt;13:</strong> BlackHole virtual audio device</li>
-            <li><strong>Windows:</strong> WASAPI Loopback (zero setup)</li>
-          </ul>
-          <p class="note">See NATIVE_MODULE_NOTES.md for integration details</p>
+        <div class="permissions-box glass-panel" id="permissionsInfo">
+          <h3>System Audio Requirements</h3>
+          <div id="permissionsContent">
+            <!-- Content populated by JS -->
+          </div>
         </div>
       </div>
-    </div>
+    </main>
   </div>
+
+  <div id="toast-container"></div>
 
   <script src="audioCapture.js"></script>
   <script src="renderer.js"></script>
