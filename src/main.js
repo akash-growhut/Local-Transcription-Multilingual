@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer } = require("electron");
+const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { exec } = require("child_process");
@@ -14,8 +14,8 @@ if (process.platform === "darwin") {
     NativeAudioCapture = require("../native-audio/index.js");
     console.log("✅ Native audio capture module loaded");
   } catch (error) {
-    console.log("⚠️ Native audio capture not available:", error.message);
-    console.log("   Falling back to web API method");
+    console.error("❌ Native audio capture not available:", error.message);
+    console.error("   Please build the native module: npm run build-native");
   }
 }
 
@@ -409,6 +409,25 @@ ipcMain.handle("start-microphone-capture", async (event, apiKey) => {
 
 ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
   try {
+    // Check if native audio capture is available
+    if (!NativeAudioCapture) {
+      return {
+        success: false,
+        error:
+          "Native audio capture module not available.\n\n" +
+          "This application requires native audio capture for speaker/system audio.\n\n" +
+          "To fix this:\n" +
+          "1. Build the native module:\n" +
+          "   npm run build-native\n\n" +
+          "2. Restart the app:\n" +
+          "   npm start\n\n" +
+          "Requirements:\n" +
+          "• macOS 13+: ScreenCaptureKit\n" +
+          "• Windows: WASAPI Loopback\n\n" +
+          "See BUILD_NATIVE.md for details.",
+      };
+    }
+
     // Initialize Deepgram client for file transcription
     if (!deepgramClient) {
       deepgramClient = initializeDeepgram(apiKey);
@@ -425,7 +444,7 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
       }
     );
 
-    // Try to start native audio capture if available (macOS)
+    // Start native audio capture (macOS)
     if (NativeAudioCapture && process.platform === "darwin") {
       try {
         if (!nativeAudioCapture) {
@@ -518,20 +537,37 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
         if (result.success) {
           console.log("✅ Native macOS audio capture started");
           mainWindow.webContents.send("native-audio-started", true);
+          return { success: true };
         } else {
-          console.log("⚠️ Native audio capture failed");
-          mainWindow.webContents.send(
-            "speaker-error",
-            "Native audio capture failed. Please check Screen Recording permissions in System Preferences."
-          );
+          console.error("❌ Native audio capture failed:", result.error);
+          return {
+            success: false,
+            error:
+              "Native audio capture failed.\n\n" +
+              "Most common issue: Missing permission\n\n" +
+              "To grant permission:\n" +
+              "1. Open System Settings → Privacy & Security\n" +
+              "2. Click 'Screen & System Audio Recording'\n" +
+              "3. Toggle ON for this app (Electron)\n" +
+              "4. Restart the app\n\n" +
+              "Or run: tccutil reset ScreenCapture && npm start",
+          };
         }
       } catch (error) {
-        console.log("⚠️ Native audio capture error:", error.message);
-        // Continue with web API fallback
+        console.error("❌ Native audio capture error:", error.message);
+        return {
+          success: false,
+          error: `Native audio capture error: ${error.message}`,
+        };
       }
+    } else {
+      return {
+        success: false,
+        error:
+          "Native audio capture only supported on macOS.\n\n" +
+          "For Windows, WASAPI Loopback support needs to be implemented.",
+      };
     }
-
-    return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -581,20 +617,6 @@ ipcMain.handle("send-audio-data", async (event, audioData, source) => {
       return { success: true };
     }
     return { success: false, error: "Connection not ready" };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-// Get desktop sources for screen/audio capture
-ipcMain.handle("get-desktop-sources", async (event, options = {}) => {
-  try {
-    const sources = await desktopCapturer.getSources({
-      types: ["screen", "window"],
-      thumbnailSize: { width: 0, height: 0 }, // No thumbnails needed
-      fetchWindowIcons: false,
-    });
-    return { success: true, sources };
   } catch (error) {
     return { success: false, error: error.message };
   }

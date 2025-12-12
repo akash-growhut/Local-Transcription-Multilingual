@@ -27,6 +27,7 @@ The app follows a three-layer architecture:
 ## Installation
 
 1. Install dependencies:
+
 ```bash
 npm install
 ```
@@ -34,6 +35,7 @@ npm install
 ## Usage
 
 1. Start the application:
+
 ```bash
 npm start
 ```
@@ -45,13 +47,57 @@ npm start
 ## System Audio Capture Notes
 
 ### macOS
-- **macOS 13+**: Uses ScreenCaptureKit (requires screen recording permission)
-- **macOS <13**: Requires BlackHole virtual audio device as fallback
-- The current implementation uses `getDisplayMedia` which requires user interaction
+
+**Current Implementation**: Uses ScreenCaptureKit for reliable system-wide audio capture
+
+#### Permission Requirements
+
+⚠️ **Important**: macOS requires **"Screen & System Audio Recording"** permission, even though this app only captures audio and never accesses your screen. This is an Apple platform limitation, not a choice by this application.
+
+**Why Screen Recording permission for audio?**
+
+- ScreenCaptureKit is Apple's official API for system audio capture
+- Apple bundles screen and system audio permissions together
+- There is no separate "audio-only" permission for system-wide capture
+- Many professional apps (Zoom, OBS, etc.) require this same permission
+
+#### How to Grant Permission
+
+1. Start the app: `npm start`
+2. Click "Allow" when prompted for Screen & System Audio Recording
+3. Or grant manually:
+   - System Settings → Privacy & Security
+   - Screen & System Audio Recording
+   - Toggle ON for Electron
+
+#### If Permission Was Denied
+
+```bash
+# Reset the permission
+tccutil reset ScreenCapture
+
+# Restart the app
+npm start
+```
+
+#### Version Compatibility
+
+- **macOS 13+**: ✅ Full support with ScreenCaptureKit
+- **macOS <13**: ⚠️ Requires BlackHole virtual audio device
+
+#### Alternative: BlackHole (No Permissions Required)
+
+If you prefer not to grant Screen Recording permission, you can use BlackHole:
+
+1. Install BlackHole: https://existential.audio/blackhole/
+2. Route system audio through BlackHole
+3. App captures from BlackHole (no permissions needed)
+
+See `AUDIO_CAPTURE_OPTIONS.md` for detailed comparison of methods.
 
 ### Windows
+
 - Uses WASAPI Loopback (requires native module for full implementation)
-- Current implementation uses `getDisplayMedia` as a fallback
 
 ## Project Structure
 
@@ -81,6 +127,7 @@ The current implementation provides a foundation that can be extended with nativ
 ## Development
 
 Run in development mode with DevTools:
+
 ```bash
 npm run dev
 ```
@@ -88,6 +135,7 @@ npm run dev
 ## Building
 
 Build the application:
+
 ```bash
 npm run build
 ```
@@ -95,4 +143,3 @@ npm run build
 ## License
 
 ISC
-

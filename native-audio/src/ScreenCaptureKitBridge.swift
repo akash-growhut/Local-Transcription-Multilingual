@@ -28,19 +28,18 @@
         
         Task {
             do {
-                // Use ScreenCaptureKit's async API
-                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                // Use ScreenCaptureKit's async API with audio-only permission
+                // excludingDesktopWindows: true = requests "System Audio Recording" permission only
+                // onScreenWindowsOnly: false = allows system audio capture
+                let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
                 
-                guard let display = content.displays.first else {
-                    print("No display found")
-                    return
-                }
-                
-                let filter = SCContentFilter(display: display, excludingWindows: [])
+                // For audio-only permission (macOS 14.4+):
+                // Use nil display to capture system audio without screen recording permission
+                let filter = SCContentFilter(display: nil, excludingApplications: [], exceptingWindows: [])
                 
                 let config = SCStreamConfiguration()
                 config.capturesAudio = true
-                config.capturesVideo = false
+                config.capturesVideo = false  // Explicitly disable video capture
                 config.sampleRate = 16000
                 config.channelCount = 1
                 

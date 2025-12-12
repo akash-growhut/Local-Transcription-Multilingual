@@ -22,5 +22,15 @@
     "electron": "^39.2.6",
     "electron-builder": "^24.9.1",
     "node-gyp": "^10.0.0"
+  },
+  "build": {
+    "appId": "com.stt.electron",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "This app needs access to your microphone to transcribe your voice.",
+        "NSSystemAudioRecordingUsageDescription": "This app needs access to system audio to transcribe speaker output."
+      }
+    }
   }
 }
