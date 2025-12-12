@@ -31,7 +31,7 @@ let audioChunks = [];
 let audioChunkCount = 0;
 let currentAudioFile = null;
 let audioStartTime = null;
-const CHUNKS_PER_FILE = 150; // ~3 seconds of audio (150 chunks * 20ms = 3s)
+const CHUNKS_PER_FILE = 75; // ~1.5 seconds of audio (75 chunks * 20ms = 1.5s)
 
 // Function to transcribe audio file with Deepgram using raw PCM data
 async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
