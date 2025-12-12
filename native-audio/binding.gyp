@@ -24,10 +24,10 @@
         ],
         "OTHER_LDFLAGS": [
           "-framework", "Foundation",
-          "-framework", "ScreenCaptureKit",
+          "-framework", "AppKit",
+          "-framework", "CoreAudio",
           "-framework", "AVFoundation",
-          "-framework", "CoreMedia",
-          "-framework", "CoreGraphics"
+          "-framework", "AudioToolbox"
         ],
         "ENABLE_HARDENED_RUNTIME": "YES"
       },
@@ -35,10 +35,10 @@
         ["OS=='mac'", {
           "libraries": [
             "-framework Foundation",
-            "-framework ScreenCaptureKit",
+            "-framework AppKit",
+            "-framework CoreAudio",
             "-framework AVFoundation",
-            "-framework CoreMedia",
-            "-framework CoreGraphics"
+            "-framework AudioToolbox"
           ]
         }]
       ]

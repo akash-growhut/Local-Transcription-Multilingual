@@ -29,7 +29,7 @@
       "category": "public.app-category.utilities",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "This app needs access to your microphone to transcribe your voice.",
-        "NSSystemAudioRecordingUsageDescription": "This app needs access to system audio to transcribe speaker output."
+        "NSAudioCaptureUsageDescription": "This app needs access to system audio to transcribe speaker output using CoreAudio Process Taps."
       }
     }
   }
