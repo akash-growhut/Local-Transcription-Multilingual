@@ -529,8 +529,20 @@ Napi::Value AudioCaptureAddon::IsActive(const Napi::CallbackInfo& info) {
     return Napi::Boolean::New(env, isCapturing_);
 }
 
+// Forward declarations
+extern Napi::Object InitVirtualAudioCapture(Napi::Env env, Napi::Object exports);
+extern Napi::Object InitAudioTapCapture(Napi::Env env, Napi::Object exports);
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
+    // Initialize ScreenCaptureKit-based capture (legacy, shows recording icon)
     AudioCaptureAddon::Init(env, exports);
+    
+    // Initialize VirtualAudioCapture (requires driver install + user config)
+    InitVirtualAudioCapture(env, exports);
+    
+    // Initialize AudioTapCapture (NEW - taps default output, no user action needed)
+    InitAudioTapCapture(env, exports);
+    
     return exports;
 }
 

@@ -1,18 +1,44 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  desktopCapturer,
+  dialog,
+} = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { exec } = require("child_process");
 const https = require("https");
 const { createClient } = require("@deepgram/sdk");
+const {
+  ensureVirtualAudioDriver,
+  createMultiOutputDevice,
+} = require("./driverInstaller");
 
 // Try to load native audio capture module (macOS only)
-let NativeAudioCapture = null;
+let NativeAudioModule = null;
+let SmartAudioCapture = null;
 let nativeAudioCapture = null;
+let captureMethod = null; // 'virtualDriver' or 'screenCapture'
 
 if (process.platform === "darwin") {
   try {
-    NativeAudioCapture = require("../native-audio/index.js");
+    NativeAudioModule = require("../native-audio/index.js");
+    SmartAudioCapture = NativeAudioModule.SmartAudioCapture;
     console.log("✅ Native audio capture module loaded");
+
+    // Check available methods
+    const smartCapture = new SmartAudioCapture(() => {});
+    const methods = smartCapture.getAvailableMethods();
+
+    if (methods.virtualDriver) {
+      console.log(
+        "✅ Surge Audio driver detected - will capture WITHOUT screen recording icon"
+      );
+    } else if (methods.screenCapture) {
+      console.log("⚠️ Using ScreenCaptureKit (shows recording icon)");
+      console.log("   For no icon: cd surge-audio-driver && ./install.sh");
+    }
   } catch (error) {
     console.log("⚠️ Native audio capture not available:", error.message);
     console.log("   Falling back to web API method");
@@ -29,9 +55,12 @@ let speakerSendCount = 0;
 // File stream for saving audio chunks
 let audioChunks = [];
 let audioChunkCount = 0;
+let audioByteCount = 0; // Track total bytes for duration calculation
 let currentAudioFile = null;
 let audioStartTime = null;
-const CHUNKS_PER_FILE = 150; // ~3 seconds of audio (150 chunks * 20ms = 3s)
+let audioSampleRate = 16000; // Will be updated based on capture method
+let audioChannels = 1; // Will be updated based on capture method
+const AUDIO_CHUNK_DURATION_SEC = 3; // Save 3-second chunks
 
 // Function to transcribe audio file with Deepgram using raw PCM data
 async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
@@ -159,6 +188,12 @@ function saveAudioChunksAsMP3() {
     "temp_audio",
     `audio_${uniqueId}.raw`
   );
+  const resampledRawPath = path.join(
+    __dirname,
+    "..",
+    "temp_audio",
+    `audio_${uniqueId}_16k.raw`
+  );
   const mp3FilePath = path.join(
     __dirname,
     "..",
@@ -166,51 +201,67 @@ function saveAudioChunksAsMP3() {
     `audio_${uniqueId}.mp3`
   );
 
-  // Track file index for sequential display (start at 0)
-  const fileIndex = Math.floor(
-    (audioChunkCount - audioChunks.length) / CHUNKS_PER_FILE
-  );
+  // Track file index for sequential display
+  const fileIndex = audioChunkCount;
+  audioChunkCount++;
 
-  // Save raw PCM data
+  // Save raw PCM data at original sample rate
   const rawData = Buffer.concat(audioChunks);
   fs.writeFileSync(rawFilePath, rawData);
 
-  // Convert to MP3 using ffmpeg (if available)
-  const ffmpegCmd = `ffmpeg -f s16le -ar 16000 -ac 1 -i "${rawFilePath}" -codec:a libmp3lame -b:a 128k "${mp3FilePath}" -y`;
+  // Calculate actual duration
+  const bytesPerSample = 2; // Int16
+  const durationSec =
+    rawData.length / (audioSampleRate * audioChannels * bytesPerSample);
 
-  exec(ffmpegCmd, async (error, stdout, stderr) => {
-    if (error) {
-      console.log(
-        `⚠️ Could not convert to MP3 (ffmpeg not found?): ${error.message}`
-      );
-      console.log(`💾 Saved raw audio to: ${rawFilePath}`);
-      console.log(
-        `📝 To convert manually: ffmpeg -f s16le -ar 16000 -ac 1 -i ${rawFilePath} ${mp3FilePath}`
-      );
-    } else {
-      // MP3 conversion successful
-      console.log(
-        `💾 Saved MP3: ${path.basename(mp3FilePath)} (${
-          audioChunks.length
-        } chunks, ${(rawData.length / 32000).toFixed(2)}s)`
-      );
+  // Convert to both MP3 and resampled raw (16kHz mono) for Deepgram
+  // Step 1: Create resampled raw file for Deepgram transcription
+  const resampleCmd = `ffmpeg -f s16le -ar ${audioSampleRate} -ac ${audioChannels} -i "${rawFilePath}" -f s16le -ar 16000 -ac 1 "${resampledRawPath}" -y`;
 
-      // Transcribe using raw PCM data (before deleting it)
-      await transcribeMP3File(mp3FilePath, fileIndex, rawFilePath);
-
-      // Delete raw file after transcription
-      try {
-        fs.unlinkSync(rawFilePath);
-      } catch (e) {
-        console.log(
-          `⚠️ Could not delete raw file: ${path.basename(rawFilePath)}`
-        );
-      }
+  exec(resampleCmd, async (resampleError, stdout, stderr) => {
+    if (resampleError) {
+      console.log(`⚠️ Could not resample audio: ${resampleError.message}`);
     }
+
+    // Step 2: Create MP3 file
+    const ffmpegCmd = `ffmpeg -f s16le -ar ${audioSampleRate} -ac ${audioChannels} -i "${rawFilePath}" -codec:a libmp3lame -ar 16000 -ac 1 -b:a 128k "${mp3FilePath}" -y`;
+
+    exec(ffmpegCmd, async (error, stdout, stderr) => {
+      if (error) {
+        console.log(
+          `⚠️ Could not convert to MP3 (ffmpeg not found?): ${error.message}`
+        );
+        console.log(`💾 Saved raw audio to: ${rawFilePath}`);
+      } else {
+        // MP3 conversion successful
+        console.log(
+          `💾 Saved MP3: ${path.basename(mp3FilePath)} (${durationSec.toFixed(
+            2
+          )}s)`
+        );
+
+        // Transcribe using resampled raw PCM data (16kHz mono)
+        const transcriptionRawPath = fs.existsSync(resampledRawPath)
+          ? resampledRawPath
+          : rawFilePath;
+        await transcribeMP3File(mp3FilePath, fileIndex, transcriptionRawPath);
+
+        // Delete raw files after transcription
+        try {
+          fs.unlinkSync(rawFilePath);
+          if (fs.existsSync(resampledRawPath)) {
+            fs.unlinkSync(resampledRawPath);
+          }
+        } catch (e) {
+          console.log(`⚠️ Could not delete raw files`);
+        }
+      }
+    });
   });
 
   // Clear chunks for next file
   audioChunks = [];
+  audioByteCount = 0;
 }
 
 // Initialize Deepgram client
@@ -426,7 +477,11 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
     );
 
     // Try to start native audio capture if available (macOS)
-    if (NativeAudioCapture && process.platform === "darwin") {
+    // Uses SmartAudioCapture which automatically selects the best method:
+    // - AudioTapCapture: Taps default output directly (NO icon, no setup)
+    // - VirtualAudioCapture: Uses Surge Audio driver (NO icon, requires setup)
+    // - AudioCapture: Uses ScreenCaptureKit (shows recording icon)
+    if (SmartAudioCapture && process.platform === "darwin") {
       try {
         if (!nativeAudioCapture) {
           let audioSampleCount = 0;
@@ -434,10 +489,18 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
           // Initialize audio saving
           audioChunks = [];
           audioChunkCount = 0;
+          audioByteCount = 0;
           audioStartTime = Date.now();
-          console.log(`💾 Will save audio as MP3 files with unique names`);
 
-          nativeAudioCapture = new NativeAudioCapture((audioBuffer) => {
+          // ScreenCaptureKit outputs 16kHz mono (configured in native code)
+          audioSampleRate = 16000;
+          audioChannels = 1;
+
+          console.log(
+            `💾 Will save ${AUDIO_CHUNK_DURATION_SEC}s MP3 chunks to temp_audio/`
+          );
+
+          nativeAudioCapture = new SmartAudioCapture((audioBuffer) => {
             // audioBuffer is a Node Buffer of float32 PCM from native
             // Reinterpret bytes as Float32Array without copying per-element
             const byteOffset = audioBuffer.byteOffset || 0;
@@ -476,23 +539,30 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
               audioSampleCount++;
             }
 
-            // Send to Deepgram
+            // Create buffer for saving
+            const buffer = Buffer.from(
+              int16Data.buffer,
+              int16Data.byteOffset,
+              int16Data.byteLength
+            );
+
+            // Save chunk to array for MP3 conversion
+            audioChunks.push(buffer);
+            audioByteCount += buffer.length;
+
+            // Calculate current duration
+            const bytesPerSample = 2; // Int16
+            const currentDuration =
+              audioByteCount /
+              (audioSampleRate * audioChannels * bytesPerSample);
+
+            // Save as MP3 file every AUDIO_CHUNK_DURATION_SEC seconds
+            if (currentDuration >= AUDIO_CHUNK_DURATION_SEC) {
+              saveAudioChunksAsMP3();
+            }
+
+            // Send to Deepgram (if connected)
             if (speakerConnection && speakerReady) {
-              const buffer = Buffer.from(
-                int16Data.buffer,
-                int16Data.byteOffset,
-                int16Data.byteLength
-              );
-
-              // Save chunk to array
-              audioChunks.push(buffer);
-              audioChunkCount++;
-
-              // Save as MP3 file every N chunks
-              if (audioChunkCount % CHUNKS_PER_FILE === 0) {
-                saveAudioChunksAsMP3();
-              }
-
               try {
                 speakerConnection.send(buffer);
                 speakerSendCount++;
@@ -516,13 +586,29 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
 
         const result = nativeAudioCapture.start();
         if (result.success) {
-          console.log("✅ Native macOS audio capture started");
-          mainWindow.webContents.send("native-audio-started", true);
+          captureMethod = result.method;
+
+          const methodMessages = {
+            virtualDriver: "✅ Surge Audio driver started (no recording icon!)",
+            screenCapture:
+              "⚠️ ScreenCaptureKit started (recording icon visible)",
+          };
+
+          console.log(
+            methodMessages[result.method] ||
+              `✅ Audio capture started: ${result.method}`
+          );
+
+          mainWindow.webContents.send("native-audio-started", {
+            active: true,
+            method: result.method,
+            noRecordingIcon: result.method === "virtualDriver",
+          });
         } else {
-          console.log("⚠️ Native audio capture failed");
+          console.log("⚠️ Native audio capture failed:", result.error);
           mainWindow.webContents.send(
             "speaker-error",
-            "Native audio capture failed. Please check Screen Recording permissions in System Preferences."
+            `Audio capture failed: ${result.error}`
           );
         }
       } catch (error) {
@@ -556,9 +642,8 @@ ipcMain.handle("stop-speaker-capture", async () => {
 
   // Save any remaining audio chunks
   if (audioChunks.length > 0) {
-    const finalFileIndex = Math.floor(audioChunkCount / CHUNKS_PER_FILE);
     saveAudioChunksAsMP3();
-    console.log(`💾 Saved final audio file (${audioChunks.length} chunks)`);
+    console.log(`💾 Saved final audio chunk`);
   }
 
   if (speakerConnection) {
@@ -600,8 +685,77 @@ ipcMain.handle("get-desktop-sources", async (event, options = {}) => {
   }
 });
 
-app.whenReady().then(() => {
+// Check if Surge Audio driver is installed
+ipcMain.handle("check-audio-driver", async () => {
+  if (!VirtualAudioCapture) {
+    return {
+      installed: false,
+      available: false,
+      message: "Native module not loaded",
+    };
+  }
+
+  try {
+    const capture = new VirtualAudioCapture(() => {});
+    const installed = capture.isDriverInstalled();
+    const deviceInfo = capture.getDeviceInfo();
+
+    return {
+      installed,
+      available: true,
+      deviceInfo,
+      message: installed
+        ? "Surge Audio driver is installed. Audio capture will NOT show recording icon."
+        : "Surge Audio driver not installed. Run: cd surge-audio-driver && ./install.sh",
+    };
+  } catch (error) {
+    return {
+      installed: false,
+      available: false,
+      message: error.message,
+    };
+  }
+});
+
+// Get current audio capture method
+ipcMain.handle("get-capture-method", async () => {
+  const descriptions = {
+    virtualDriver: "Using Surge Audio driver (no recording icon)",
+    screenCapture: "Using ScreenCaptureKit (recording icon visible)",
+  };
+
+  return {
+    method: captureMethod,
+    noRecordingIcon: captureMethod === "virtualDriver",
+    description: descriptions[captureMethod] || "No capture active",
+  };
+});
+
+app.whenReady().then(async () => {
+  // Ensure temp_audio directory exists
+  const tempAudioDir = path.join(__dirname, "..", "temp_audio");
+  if (!fs.existsSync(tempAudioDir)) {
+    fs.mkdirSync(tempAudioDir, { recursive: true });
+    console.log(`📁 Created temp_audio directory: ${tempAudioDir}`);
+  }
+
   createWindow();
+
+  // Check and install virtual audio driver if needed (macOS only)
+  if (process.platform === "darwin") {
+    try {
+      const result = await ensureVirtualAudioDriver(mainWindow);
+      if (result.wasInstalled) {
+        console.log("🔄 Reloading native audio module after driver install...");
+        // Reload the native module to detect the new driver
+        delete require.cache[require.resolve("../native-audio/index.js")];
+        NativeAudioModule = require("../native-audio/index.js");
+        SmartAudioCapture = NativeAudioModule.SmartAudioCapture;
+      }
+    } catch (error) {
+      console.log("⚠️ Driver check failed:", error.message);
+    }
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

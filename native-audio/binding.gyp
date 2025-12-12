@@ -3,7 +3,9 @@
     {
       "target_name": "audio_capture",
       "sources": [
-        "src/audio_capture.mm"
+        "src/audio_capture.mm",
+        "src/VirtualAudioCapture.mm",
+        "src/AudioTapCapture.mm"
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")"
@@ -16,7 +18,7 @@
       "xcode_settings": {
         "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
         "CLANG_CXX_LIBRARY": "libc++",
-        "MACOSX_DEPLOYMENT_TARGET": "13.0",
+        "MACOSX_DEPLOYMENT_TARGET": "12.0",
         "OTHER_CPLUSPLUSFLAGS": [
           "-std=c++17",
           "-fmodules",
@@ -26,7 +28,9 @@
           "-framework", "Foundation",
           "-framework", "ScreenCaptureKit",
           "-framework", "AVFoundation",
-          "-framework", "CoreMedia"
+          "-framework", "CoreMedia",
+          "-framework", "CoreAudio",
+          "-framework", "AudioToolbox"
         ],
         "ENABLE_HARDENED_RUNTIME": "YES"
       },
@@ -36,7 +40,9 @@
             "-framework Foundation",
             "-framework ScreenCaptureKit",
             "-framework AVFoundation",
-            "-framework CoreMedia"
+            "-framework CoreMedia",
+            "-framework CoreAudio",
+            "-framework AudioToolbox"
           ]
         }]
       ]
