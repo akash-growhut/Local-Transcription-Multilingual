@@ -2,6 +2,7 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <objc/message.h>
 #include <napi.h>
 #include <vector>
@@ -285,177 +286,134 @@ void AudioCaptureAddon::OnAudioData(const float* data, size_t length) {
 void AudioCaptureAddon::StartCaptureAsync() {
     __block AudioCaptureAddon* blockSelf = this;
     
-    // Use ScreenCaptureKit directly - use the Objective-C compatible method
+    // CRITICAL: Order matters for permission dialog wording!
+    // Following Granola's approach to get "system audio" instead of "screen and audio" wording
     dispatch_async(dispatch_get_main_queue(), ^{
         @autoreleasepool {
-            // Use SCShareableContent with excludingDesktopWindows for audio-only permission
-            // This requests "System Audio Recording" permission instead of "Screen Recording"
-            Class shareableContentClass = NSClassFromString(@"SCShareableContent");
-            if (!shareableContentClass) {
-                NSLog(@"❌ SCShareableContent class not found");
+            // Step 1: Get main display ID directly
+            CGDirectDisplayID displayID = CGMainDisplayID();
+            if (displayID == kCGNullDirectDisplay) {
+                NSLog(@"❌ Failed to get main display ID");
                 blockSelf->isCapturing_ = false;
                 return;
             }
             
-            // Use the audio-only method: excludingDesktopWindows:onScreenWindowsOnly:completionHandler:
-            SEL getContentSelector = NSSelectorFromString(@"getShareableContentExcludingDesktopWindows:onScreenWindowsOnly:completionHandler:");
-            if ([shareableContentClass respondsToSelector:getContentSelector]) {
-                        NSLog(@"📞 Calling getShareableContentExcludingDesktopWindows:onScreenWindowsOnly:completionHandler: for audio-only permission");
-                        
-                        // Create a retained block to prevent deallocation
-                        // Use a strong reference to self to prevent deallocation
-                        AudioCaptureAddon* strongSelf = this;
-                        void (^completionHandler)(SCShareableContent*, NSError*) = [^(SCShareableContent* content, NSError* error) {
-                            AudioCaptureAddon* blockSelf = strongSelf;
-                            if (!blockSelf) {
-                                NSLog(@"❌ AudioCaptureAddon instance deallocated");
-                                return;
-                            }
-                            if (error) {
-                                NSLog(@"❌ Error getting shareable content: %@", error.localizedDescription);
-                                blockSelf->isCapturing_ = false;
-                                return;
-                            }
-                            
-                            if (!content) {
-                                NSLog(@"❌ No shareable content returned");
-                                blockSelf->isCapturing_ = false;
-                                return;
-                            }
-                            
-                            NSLog(@"📺 Got shareable content: %lu displays, %lu windows, %lu apps", 
-                                  (unsigned long)content.displays.count,
-                                  (unsigned long)content.windows.count,
-                                  (unsigned long)content.applications.count);
-                            
-                            // IMPORTANT: ScreenCaptureKit ALWAYS requires "Screen & System Audio Recording" permission
-                            // even when capturing audio-only. This is an Apple platform limitation.
-                            // There is NO way to capture system audio with audio-only permission using ScreenCaptureKit.
-                            //
-                            // For audio-only permission, alternatives are:
-                            // 1. Core Audio Process Taps (macOS 14.4+) - complex, limited functionality
-                            // 2. BlackHole virtual audio device - requires user setup, no permissions needed
-                            // 3. Accept Screen Recording permission - simplest, most reliable
-                            //
-                            // We use the standard display filter for system-wide audio capture
-                            SCContentFilter* filter = nil;
-                            
-                            if (content.displays.count > 0) {
-                                SCDisplay* display = content.displays.firstObject;
-                                NSLog(@"🖥️ Using display: %u for system audio capture", (unsigned int)display.displayID);
-                                NSLog(@"⚠️  Note: This requires 'Screen & System Audio Recording' permission");
-                                
-                                // Standard display filter for system audio
-                                filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
-                            } else {
-                                NSLog(@"❌ No displays available");
-                                blockSelf->isCapturing_ = false;
-                                return;
-                            }
-                            
-                            if (!filter) {
-                                NSLog(@"❌ Failed to create content filter");
-                                blockSelf->isCapturing_ = false;
-                                return;
-                            }
-                            
-                            NSLog(@"✅ Created system audio capture filter");
-                            
-                            // Create stream configuration - AUDIO ONLY
-                            // Note: SCStreamConfiguration doesn't have capturesVideo property in ObjC
-                            // By default, video capture is disabled unless explicitly configured
-                            SCStreamConfiguration* config = [[SCStreamConfiguration alloc] init];
-                            config.capturesAudio = YES;
-                            config.sampleRate = 16000;
-                            config.channelCount = 1;
-                            NSLog(@"⚙️ Stream config: audio=YES (video disabled by default), sampleRate=16000, channels=1");
-                            
-                            // Create output handler with strong reference
-                            StreamOutputHandler* handler = [[StreamOutputHandler alloc] init];
-                            AudioCaptureAddon* handlerSelf = blockSelf;
-                            handler.callback = ^(const float* data, size_t length) {
-                                if (handlerSelf && length > 0) {
-                                    handlerSelf->OnAudioData(data, length);
-                                }
-                            };
-                            
-                            // Create stream - retain it immediately
-                            SCStream* stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:nil];
-                            
-                            if (!stream) {
-                                NSLog(@"❌ Failed to create stream");
-                                blockSelf->isCapturing_ = false;
-                                return;
-                            }
-                            
-                            NSLog(@"✅ Stream created successfully");
-                            
-                            // Retain stream and handler to prevent deallocation
-                            blockSelf->stream_ = stream;
-                            blockSelf->outputHandler_ = handler;
-                            
-                            // Add stream output
-                            NSError* outputError = nil;
-                            BOOL added = [stream addStreamOutput:handler type:SCStreamOutputTypeAudio sampleHandlerQueue:nil error:&outputError];
-                            
-                            if (!added || outputError) {
-                                NSLog(@"❌ Error adding stream output: %@", outputError ? outputError.localizedDescription : @"Unknown error");
-                                blockSelf->isCapturing_ = false;
-                                blockSelf->stream_ = nil;
-                                blockSelf->outputHandler_ = nil;
-                                return;
-                            }
-                            
-                            NSLog(@"✅ Stream output added, starting capture...");
-                            
-                            // Start capture - use a strong reference in the completion handler
-                            AudioCaptureAddon* captureSelf = blockSelf;
-                            [stream startCaptureWithCompletionHandler:^(NSError* startError) {
-                                if (startError) {
-                                    NSLog(@"❌ Error starting capture: %@", startError.localizedDescription);
-                                    if (captureSelf) {
-                                        captureSelf->isCapturing_ = false;
-                                        captureSelf->stream_ = nil;
-                                        captureSelf->outputHandler_ = nil;
-                                    }
-                                } else {
-                                    NSLog(@"✅ Native macOS audio capture started successfully");
-                                    if (captureSelf) {
-                                        captureSelf->isCapturing_ = true;
-                                    }
-                                }
-                            }];
-                        } copy]; // Copy the block to heap
-                        
-                        // Use NSInvocation to safely call the method with proper parameters
-                        NSMethodSignature* sig = [shareableContentClass methodSignatureForSelector:getContentSelector];
-                        if (!sig) {
-                            NSLog(@"❌ Method signature not found for getShareableContentExcludingDesktopWindows:onScreenWindowsOnly:completionHandler:");
-                            blockSelf->isCapturing_ = false;
-                            return;
-                        }
-                        
-                        NSInvocation* inv = [NSInvocation invocationWithMethodSignature:sig];
-                        [inv setTarget:shareableContentClass];
-                        [inv setSelector:getContentSelector];
-                        
-                        // Set arguments: excludingDesktopWindows (BOOL at index 2), onScreenWindowsOnly (BOOL at index 3), completionHandler (block at index 4)
-                        BOOL excludingDesktopWindows = YES;  // YES for audio-only permission
-                        BOOL onScreenWindowsOnly = NO;       // NO to allow system audio capture
-                        [inv setArgument:&excludingDesktopWindows atIndex:2];
-                        [inv setArgument:&onScreenWindowsOnly atIndex:3];
-                        [inv setArgument:&completionHandler atIndex:4];
-                        [inv retainArguments]; // This retains the block and parameters
-                        [inv invoke];
-                        NSLog(@"📞 Invoked getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler: for audio-only permission");
-                        
-                        // The block is copied and retained by NSInvocation's retainArguments
-                        return;
-                    } else {
-                        NSLog(@"❌ getShareableContentExcludingDesktopWindows:onScreenWindowsOnly:completionHandler: method not found");
-                        blockSelf->isCapturing_ = false;
-                        return;
+            NSLog(@"🖥️ Using main display ID: %u for audio-only capture", displayID);
+            
+            // Step 2: Get ONE display from shareable content using minimal API
+            // Use sync method with minimal flags to avoid triggering full enumeration
+            AudioCaptureAddon* strongSelf = blockSelf;
+            [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent* content, NSError* error) {
+                AudioCaptureAddon* blockSelf = strongSelf;
+                if (!blockSelf) {
+                    NSLog(@"❌ AudioCaptureAddon instance deallocated");
+                    return;
+                }
+                
+                if (error || !content) {
+                    NSLog(@"❌ Error getting shareable content: %@", error ? error.localizedDescription : @"No content");
+                    blockSelf->isCapturing_ = false;
+                    return;
+                }
+                
+                // Find the display matching our main display ID
+                SCDisplay* targetDisplay = nil;
+                for (SCDisplay* display in content.displays) {
+                    if (display.displayID == displayID) {
+                        targetDisplay = display;
+                        break;
                     }
+                }
+                
+                if (!targetDisplay && content.displays.count > 0) {
+                    // Fallback to first display
+                    targetDisplay = content.displays.firstObject;
+                }
+                
+                if (!targetDisplay) {
+                    NSLog(@"❌ No display found");
+                    blockSelf->isCapturing_ = false;
+                    return;
+                }
+                
+                NSLog(@"✅ Found display: %u", (unsigned int)targetDisplay.displayID);
+                
+                // Step 3: Create filter with AUDIO-ONLY configuration signaled early
+                // Exclude all windows to minimize screen context
+                SCContentFilter* filter = [[SCContentFilter alloc] initWithDisplay:targetDisplay 
+                                                                  excludingWindows:content.windows];
+                if (!filter) {
+                    NSLog(@"❌ Failed to create content filter");
+                    blockSelf->isCapturing_ = false;
+                    return;
+                }
+                
+                NSLog(@"✅ Created filter with all windows excluded (audio focus)");
+                
+                // Step 4: Configure AUDIO-ONLY stream
+                SCStreamConfiguration* config = [[SCStreamConfiguration alloc] init];
+                config.capturesAudio = YES;
+                // No capturesVideo in ObjC - defaults to NO
+                config.sampleRate = 16000;
+                config.channelCount = 1;
+                
+                NSLog(@"⚙️ Stream config: audio=YES (video disabled), sampleRate=16000, channels=1");
+                
+                // Step 5: Create output handler
+                StreamOutputHandler* handler = [[StreamOutputHandler alloc] init];
+                AudioCaptureAddon* handlerSelf = blockSelf;
+                handler.callback = ^(const float* data, size_t length) {
+                    if (handlerSelf && length > 0) {
+                        handlerSelf->OnAudioData(data, length);
+                    }
+                };
+                
+                // Step 6: Create stream
+                SCStream* stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:nil];
+                if (!stream) {
+                    NSLog(@"❌ Failed to create stream");
+                    blockSelf->isCapturing_ = false;
+                    return;
+                }
+                
+                NSLog(@"✅ Stream created");
+                
+                // Retain stream and handler
+                blockSelf->stream_ = stream;
+                blockSelf->outputHandler_ = handler;
+                
+                // Step 7: Add stream output
+                NSError* outputError = nil;
+                BOOL added = [stream addStreamOutput:handler type:SCStreamOutputTypeAudio sampleHandlerQueue:nil error:&outputError];
+                
+                if (!added || outputError) {
+                    NSLog(@"❌ Error adding stream output: %@", outputError ? outputError.localizedDescription : @"Unknown error");
+                    blockSelf->isCapturing_ = false;
+                    blockSelf->stream_ = nil;
+                    blockSelf->outputHandler_ = nil;
+                    return;
+                }
+                
+                NSLog(@"✅ Stream output added, starting capture...");
+                
+                // Step 8: Start capture - permission check happens here
+                AudioCaptureAddon* captureSelf = blockSelf;
+                [stream startCaptureWithCompletionHandler:^(NSError* startError) {
+                    if (startError) {
+                        NSLog(@"❌ Error starting capture: %@", startError.localizedDescription);
+                        if (captureSelf) {
+                            captureSelf->isCapturing_ = false;
+                            captureSelf->stream_ = nil;
+                            captureSelf->outputHandler_ = nil;
+                        }
+                    } else {
+                        NSLog(@"✅ Native macOS audio capture started successfully");
+                        if (captureSelf) {
+                            captureSelf->isCapturing_ = true;
+                        }
+                    }
+                }];
+            }];
         }
     });
 }
