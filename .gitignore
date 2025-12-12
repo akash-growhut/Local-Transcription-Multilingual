@@ -1,6 +1,6 @@
 node_modules/
 dist/
-build/
+native-audio/build/
 *.log
 .DS_Store
 .env

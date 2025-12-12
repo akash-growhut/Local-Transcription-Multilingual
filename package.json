@@ -26,11 +26,10 @@
   "build": {
     "appId": "com.stt.electron",
     "mac": {
-      "category": "public.app-category.utilities",
-      "extendInfo": {
-        "NSMicrophoneUsageDescription": "This app needs access to your microphone to transcribe your voice.",
-        "NSAudioCaptureUsageDescription": "This app needs access to system audio to transcribe speaker output using CoreAudio Process Taps."
-      }
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": "build/Info.plist"
     }
   }
 }
