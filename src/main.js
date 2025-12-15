@@ -68,6 +68,51 @@ async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
     // Read the raw PCM file (16-bit signed little-endian, 16kHz, mono)
     const pcmBuffer = fs.readFileSync(rawFilePath);
 
+    // Check if audio buffer has actual data before sending to Deepgram
+    if (pcmBuffer.length === 0) {
+      console.log(
+        `⏭️ Skipping transcription: ${path.basename(
+          mp3FilePath
+        )} is empty (0 bytes)`
+      );
+      return;
+    }
+
+    // Check if audio has non-zero samples
+    const int16Array = new Int16Array(
+      pcmBuffer.buffer,
+      pcmBuffer.byteOffset,
+      pcmBuffer.length / 2
+    );
+    let hasNonZero = false;
+    let sumSquares = 0;
+
+    for (let i = 0; i < int16Array.length; i++) {
+      const sample = int16Array[i];
+      if (sample !== 0) hasNonZero = true;
+      sumSquares += sample * sample;
+    }
+
+    const rms = Math.sqrt(sumSquares / int16Array.length) || 0;
+    const RMS_THRESHOLD = 10; // Same threshold as live audio
+
+    if (!hasNonZero || rms <= RMS_THRESHOLD) {
+      console.log(
+        `⏭️ Skipping transcription: ${path.basename(
+          mp3FilePath
+        )} contains only silence (rms=${rms.toFixed(
+          2
+        )}, hasNonZero=${hasNonZero})`
+      );
+      return;
+    }
+
+    console.log(
+      `✅ Audio validation passed: rms=${rms.toFixed(
+        2
+      )}, hasNonZero=${hasNonZero}, size=${pcmBuffer.length} bytes`
+    );
+
     // Get API key from the client
     const apiKey = deepgramClient.key;
     if (!apiKey) {
@@ -870,27 +915,44 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
               int16Data.byteLength
             );
 
-            // Save chunk to array
-            audioChunks.push(buffer);
-            audioChunkCount++;
+            // Check if audio has actual data before saving or sending
+            // Only process if there are non-zero samples and RMS is above threshold
+            const RMS_THRESHOLD = 10; // Minimum RMS to consider as actual audio
+            const hasAudioData = hasNonZero && rms > RMS_THRESHOLD;
 
-            // Save as MP3 file every N chunks
-            if (audioChunkCount % SPEAKER_CHUNKS_PER_FILE === 0) {
-              saveAudioChunksAsMP3();
-            }
+            if (hasAudioData) {
+              // Save chunk to array only if it has audio data
+              audioChunks.push(buffer);
+              audioChunkCount++;
 
-            try {
-              speakerConnection.send(buffer);
-              speakerSendCount++;
-              if (speakerSendCount <= 5) {
+              // Save as MP3 file every N chunks
+              if (audioChunkCount % SPEAKER_CHUNKS_PER_FILE === 0) {
+                saveAudioChunksAsMP3();
+              }
+
+              // Send to live Deepgram connection
+              try {
+                speakerConnection.send(buffer);
+                speakerSendCount++;
+                if (speakerSendCount <= 5) {
+                  console.log(
+                    `📤 Sent audio chunk ${speakerSendCount}, size=${
+                      buffer.length
+                    } bytes, rms≈${rms.toFixed(2)}`
+                  );
+                }
+              } catch (error) {
+                console.error("❌ Error sending to Deepgram:", error);
+              }
+            } else {
+              // Log occasionally to show we're skipping empty/silent audio
+              if (audioSampleCount % 100 === 0) {
                 console.log(
-                  `📤 Sent audio chunk ${speakerSendCount}, size=${
-                    buffer.length
-                  } bytes, rms≈${rms.toFixed(2)}`
+                  `⏭️ Skipping empty/silent audio (rms=${rms.toFixed(
+                    2
+                  )}, hasNonZero=${hasNonZero}) - not saving or sending`
                 );
               }
-            } catch (error) {
-              console.error("❌ Error sending to Deepgram:", error);
             }
           } else {
             if (audioSampleCount === 1) {
