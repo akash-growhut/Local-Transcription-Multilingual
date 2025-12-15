@@ -25,6 +25,7 @@ let microphoneConnection = null;
 let speakerConnection = null;
 let speakerReady = false;
 let speakerSendCount = 0;
+let microphoneSampleRate = 16000; // Default, will be updated when microphone starts
 
 // File stream for saving audio chunks - SPEAKER
 let audioChunks = [];
@@ -39,9 +40,13 @@ const SPEAKER_CHUNKS_PER_FILE = 75; // ~1.5 seconds of audio (75 chunks * 20ms =
 let microphoneAudioChunks = [];
 let microphoneAudioChunkCount = 0;
 let microphoneAudioStartTime = null;
-// Microphone uses Web Audio ScriptProcessor: 4096 samples at 16kHz = 256ms per chunk
-// For 1.5 seconds: 1500ms / 256ms = ~6 chunks
-const MICROPHONE_CHUNKS_PER_FILE = 6; // ~1.5 seconds of audio (6 chunks * 256ms = 1.536s)
+// Microphone uses Web Audio ScriptProcessor: 4096 samples at native rate (usually 48kHz)
+// At 48kHz: 4096 samples = 85.33ms per chunk
+// For ~1.5 seconds: 1500ms / 85.33ms = ~18 chunks
+// At 16kHz: 4096 samples = 256ms per chunk
+// For ~1.5 seconds: 1500ms / 256ms = ~6 chunks
+// We'll adjust dynamically based on actual sample rate
+const MICROPHONE_CHUNKS_PER_FILE = 30; // Will be recalculated based on actual sample rate
 
 // Function to transcribe audio file with Deepgram using raw PCM data (SPEAKER)
 async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
@@ -184,9 +189,22 @@ async function transcribeMicrophoneMP3File(
       )}`
     );
 
+    // Verify raw file exists and has content
+    if (!fs.existsSync(rawFilePath)) {
+      console.error(`❌ [Microphone] Raw file does not exist: ${rawFilePath}`);
+      return;
+    }
+
     // Use raw PCM data instead of MP3 for better compatibility
     // Read the raw PCM file (16-bit signed little-endian, 16kHz, mono)
     const pcmBuffer = fs.readFileSync(rawFilePath);
+
+    console.log(
+      `📊 [Microphone] Raw file size: ${pcmBuffer.length} bytes (${(
+        pcmBuffer.length /
+        (microphoneSampleRate * 2)
+      ).toFixed(2)}s at ${microphoneSampleRate}Hz mono 16-bit)`
+    );
 
     // Get API key from the client
     const apiKey = deepgramClient.key;
@@ -214,6 +232,8 @@ async function transcribeMicrophoneMP3File(
         ...form.getHeaders(),
       },
     };
+
+    console.log(`📡 [Microphone] Sending to Deepgram API...`);
 
     const response = await new Promise((resolve, reject) => {
       const req = https.request(options, (res) => {
@@ -244,16 +264,39 @@ async function transcribeMicrophoneMP3File(
       form.pipe(req);
     });
 
+    console.log(
+      `📥 [Microphone] Deepgram response status: ${response.statusCode}`
+    );
+
     if (response.statusCode !== 200) {
       console.error(
         `❌ [Microphone] Deepgram API error (${response.statusCode}):`,
-        response.data
+        JSON.stringify(response.data, null, 2)
       );
       return;
     }
 
+    // Log full response for debugging
+    console.log(
+      `📝 [Microphone] Full Deepgram response:`,
+      JSON.stringify(response.data, null, 2)
+    );
+
     const transcript =
       response.data?.results?.channels?.[0]?.alternatives?.[0]?.transcript;
+
+    const confidence =
+      response.data?.results?.channels?.[0]?.alternatives?.[0]?.confidence;
+    const words =
+      response.data?.results?.channels?.[0]?.alternatives?.[0]?.words;
+
+    console.log(`📊 [Microphone] Transcript details:`, {
+      hasTranscript: !!transcript,
+      transcriptLength: transcript?.length || 0,
+      confidence: confidence,
+      wordCount: words?.length || 0,
+    });
+
     if (transcript) {
       console.log(`💬 [Microphone] Transcript ${fileIndex}: "${transcript}"`);
 
@@ -283,11 +326,20 @@ async function transcribeMicrophoneMP3File(
           mp3FilePath
         )}`
       );
+      console.log(`📊 [Microphone] Response structure:`, {
+        hasResults: !!response.data?.results,
+        hasChannels: !!response.data?.results?.channels,
+        channelCount: response.data?.results?.channels?.length || 0,
+        hasAlternatives: !!response.data?.results?.channels?.[0]?.alternatives,
+        alternativeCount:
+          response.data?.results?.channels?.[0]?.alternatives?.length || 0,
+      });
     }
   } catch (error) {
     console.error(
       `❌ [Microphone] Error transcribing ${path.basename(mp3FilePath)}:`,
-      error.message
+      error.message,
+      error.stack
     );
   }
 }
@@ -398,7 +450,7 @@ function saveMicrophoneAudioChunksAsMP3() {
   fs.writeFileSync(rawFilePath, rawData);
 
   // Convert to MP3 using ffmpeg (if available)
-  const ffmpegCmd = `ffmpeg -f s16le -ar 16000 -ac 1 -i "${rawFilePath}" -codec:a libmp3lame -b:a 128k "${mp3FilePath}" -y`;
+  const ffmpegCmd = `ffmpeg -f s16le -ar ${microphoneSampleRate} -ac 1 -i "${rawFilePath}" -codec:a libmp3lame -b:a 128k "${mp3FilePath}" -y`;
 
   exec(ffmpegCmd, async (error, stdout, stderr) => {
     if (error) {
@@ -407,14 +459,17 @@ function saveMicrophoneAudioChunksAsMP3() {
       );
       console.log(`💾 [Microphone] Saved raw audio to: ${rawFilePath}`);
       console.log(
-        `📝 [Microphone] To convert manually: ffmpeg -f s16le -ar 16000 -ac 1 -i ${rawFilePath} ${mp3FilePath}`
+        `📝 [Microphone] To convert manually: ffmpeg -f s16le -ar ${microphoneSampleRate} -ac 1 -i ${rawFilePath} ${mp3FilePath}`
       );
     } else {
       // MP3 conversion successful
       console.log(
         `💾 [Microphone] Saved MP3: ${path.basename(
           mp3FilePath
-        )} (${chunkCount} chunks, ${(rawData.length / 32000).toFixed(2)}s)`
+        )} (${chunkCount} chunks, ${(
+          rawData.length /
+          (microphoneSampleRate * 2)
+        ).toFixed(2)}s at ${microphoneSampleRate}Hz)`
       );
 
       // Transcribe using raw PCM data (before deleting it)
@@ -431,16 +486,16 @@ function saveMicrophoneAudioChunksAsMP3() {
         );
       }
 
-      // Delete MP3 file after transcription
-      try {
-        fs.unlinkSync(mp3FilePath);
-      } catch (e) {
-        console.log(
-          `⚠️ [Microphone] Could not delete MP3 file: ${path.basename(
-            mp3FilePath
-          )}`
-        );
-      }
+      // // Delete MP3 file after transcription
+      // try {
+      //   fs.unlinkSync(mp3FilePath);
+      // } catch (e) {
+      //   console.log(
+      //     `⚠️ [Microphone] Could not delete MP3 file: ${path.basename(
+      //       mp3FilePath
+      //     )}`
+      //   );
+      // }
     }
   });
 
@@ -458,13 +513,17 @@ function initializeDeepgram(apiKey) {
 }
 
 // Create Deepgram connection for microphone
-function createMicrophoneConnection(apiKey, onTranscript) {
+function createMicrophoneConnection(apiKey, onTranscript, sampleRate = 16000) {
   if (microphoneConnection) {
     microphoneConnection.finish();
   }
 
   const client = initializeDeepgram(apiKey);
   if (!client) return null;
+
+  console.log(
+    `📡 Creating microphone Deepgram connection with config: linear16, ${sampleRate}Hz, mono`
+  );
 
   const connection = client.listen.live({
     model: "nova-3",
@@ -474,12 +533,12 @@ function createMicrophoneConnection(apiKey, onTranscript) {
     endpointing: 300,
     utterance_end_ms: 1000,
     encoding: "linear16",
-    sample_rate: 16000,
+    sample_rate: sampleRate,
     channels: 1,
   });
 
   connection.on("open", () => {
-    console.log("Microphone Deepgram connection opened");
+    console.log(`Microphone Deepgram connection opened (${sampleRate}Hz)`);
     mainWindow.webContents.send("microphone-connected", true);
   });
 
@@ -639,6 +698,7 @@ ipcMain.handle("start-microphone-capture", async (event, apiKey) => {
       `💾 [Microphone] Will save audio as MP3 files with unique names`
     );
 
+    // Create connection with default sample rate (will be updated when first audio arrives)
     microphoneConnection = createMicrophoneConnection(
       apiKey,
       (transcript, isFinal, source) => {
@@ -647,7 +707,8 @@ ipcMain.handle("start-microphone-capture", async (event, apiKey) => {
           isFinal,
           source,
         });
-      }
+      },
+      microphoneSampleRate
     );
     return { success: true };
   } catch (error) {
@@ -831,72 +892,139 @@ ipcMain.handle("stop-speaker-capture", async () => {
   return { success: false, error: "No active speaker connection" };
 });
 
-ipcMain.handle("send-audio-data", async (event, audioData, source) => {
-  try {
-    const connection =
-      source === "microphone" ? microphoneConnection : speakerConnection;
-    if (connection) {
-      // Convert ArrayBuffer to Buffer for Node.js
-      const buffer = Buffer.from(audioData);
-      connection.send(buffer);
+ipcMain.handle(
+  "send-audio-data",
+  async (event, audioData, source, sampleRate) => {
+    try {
+      const connection =
+        source === "microphone" ? microphoneConnection : speakerConnection;
+      if (connection) {
+        // Convert ArrayBuffer to Buffer for Node.js
+        const buffer = Buffer.from(audioData);
 
-      // Save microphone audio chunks to file
-      if (source === "microphone") {
-        microphoneAudioChunks.push(buffer);
-        microphoneAudioChunkCount++;
+        // Update sample rate if provided (for microphone)
+        if (
+          source === "microphone" &&
+          sampleRate &&
+          sampleRate !== microphoneSampleRate
+        ) {
+          console.log(`📊 [Microphone] Sample rate detected: ${sampleRate} Hz`);
+          microphoneSampleRate = sampleRate;
 
-        // Log first few chunks for debugging with audio quality info
-        if (microphoneAudioChunkCount <= 3) {
-          // Analyze audio quality
-          const int16View = new Int16Array(
-            buffer.buffer,
-            buffer.byteOffset,
-            buffer.length / 2
-          );
-          let sum = 0;
-          let peak = 0;
-          let nonZeroCount = 0;
+          // Recreate connection with correct sample rate
+          const apiKey = deepgramClient?.key;
+          if (apiKey && microphoneConnection) {
+            console.log(
+              `🔄 [Microphone] Recreating connection with ${sampleRate}Hz...`
+            );
+            microphoneConnection.finish();
+            microphoneConnection = createMicrophoneConnection(
+              apiKey,
+              (transcript, isFinal, src) => {
+                mainWindow.webContents.send("transcript", {
+                  text: transcript,
+                  isFinal,
+                  source: src,
+                });
+              },
+              sampleRate
+            );
 
-          for (let i = 0; i < int16View.length; i++) {
-            const abs = Math.abs(int16View[i]);
-            sum += abs;
-            if (abs > peak) peak = abs;
-            if (abs > 0) nonZeroCount++;
+            // Wait a bit for new connection to open
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+        }
+
+        connection.send(buffer);
+
+        // Save microphone audio chunks to file
+        if (source === "microphone") {
+          microphoneAudioChunks.push(buffer);
+          microphoneAudioChunkCount++;
+
+          // Log first few chunks for debugging with audio quality info
+          if (microphoneAudioChunkCount <= 3) {
+            // Analyze audio quality
+            const int16View = new Int16Array(
+              buffer.buffer,
+              buffer.byteOffset,
+              buffer.length / 2
+            );
+            let sum = 0;
+            let peak = 0;
+            let nonZeroCount = 0;
+
+            for (let i = 0; i < int16View.length; i++) {
+              const abs = Math.abs(int16View[i]);
+              sum += abs;
+              if (abs > peak) peak = abs;
+              if (abs > 0) nonZeroCount++;
+            }
+
+            const avg = sum / int16View.length;
+            const rms = Math.sqrt(
+              int16View.reduce((s, v) => s + v * v, 0) / int16View.length
+            );
+
+            console.log(`📊 [Microphone] Chunk ${microphoneAudioChunkCount}:`, {
+              bytes: buffer.length,
+              samples: int16View.length,
+              sampleRate: sampleRate || microphoneSampleRate,
+              avg: avg.toFixed(2),
+              rms: rms.toFixed(2),
+              peak: peak,
+              nonZero: nonZeroCount,
+              percentNonZero:
+                ((nonZeroCount / int16View.length) * 100).toFixed(2) + "%",
+            });
+
+            // Warn if audio level is too low
+            if (peak < 1000) {
+              console.warn(
+                `⚠️ [Microphone] WARNING: Audio level is very low (peak: ${peak})!`
+              );
+              console.warn(
+                `   For clear transcription, peak should be 5000-15000.`
+              );
+              console.warn(
+                `   Please check: 1) Correct microphone selected, 2) Microphone volume in System Preferences`
+              );
+
+              // Send warning to renderer
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send(
+                  "microphone-error",
+                  `⚠️ Microphone level too low (peak: ${peak}). Please increase microphone volume in System Preferences > Sound > Input.`
+                );
+              }
+            } else if (peak >= 1000 && peak < 5000) {
+              console.log(
+                `📢 [Microphone] Audio level is low but usable (peak: ${peak}). For best results, increase microphone volume.`
+              );
+            } else {
+              console.log(
+                `✅ [Microphone] Audio level is good (peak: ${peak})`
+              );
+            }
           }
 
-          const avg = sum / int16View.length;
-          const rms = Math.sqrt(
-            int16View.reduce((s, v) => s + v * v, 0) / int16View.length
-          );
-
-          console.log(`📊 [Microphone] Chunk ${microphoneAudioChunkCount}:`, {
-            bytes: buffer.length,
-            samples: int16View.length,
-            avg: avg.toFixed(2),
-            rms: rms.toFixed(2),
-            peak: peak,
-            nonZero: nonZeroCount,
-            percentNonZero:
-              ((nonZeroCount / int16View.length) * 100).toFixed(2) + "%",
-          });
+          // Save as MP3 file every N chunks
+          if (microphoneAudioChunkCount % MICROPHONE_CHUNKS_PER_FILE === 0) {
+            console.log(
+              `📦 [Microphone] Reached ${microphoneAudioChunkCount} chunks, saving to file...`
+            );
+            saveMicrophoneAudioChunksAsMP3();
+          }
         }
 
-        // Save as MP3 file every N chunks
-        if (microphoneAudioChunkCount % MICROPHONE_CHUNKS_PER_FILE === 0) {
-          console.log(
-            `📦 [Microphone] Reached ${microphoneAudioChunkCount} chunks, saving to file...`
-          );
-          saveMicrophoneAudioChunksAsMP3();
-        }
+        return { success: true };
       }
-
-      return { success: true };
+      return { success: false, error: "Connection not ready" };
+    } catch (error) {
+      return { success: false, error: error.message };
     }
-    return { success: false, error: "Connection not ready" };
-  } catch (error) {
-    return { success: false, error: error.message };
   }
-});
+);
 
 // Get desktop sources for screen/audio capture
 ipcMain.handle("get-desktop-sources", async (event, options = {}) => {

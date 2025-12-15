@@ -10,4 +10,5 @@ build/
 *.deb
 *.rpm
 package-lock.json
-temp_audio/audio_*
+temp_audio/speaker_audio_*
+temp_audio/microphone_audio_*

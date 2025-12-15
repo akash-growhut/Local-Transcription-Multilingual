@@ -30,10 +30,11 @@ class AudioCapture {
         );
       });
 
+      // Request audio with constraints that work better with hardware
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          sampleRate: 16000,
+          // Don't force sample rate - use native rate (better quality)
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
@@ -57,10 +58,22 @@ class AudioCapture {
       console.log("🎤 [Microphone] Capabilities:", capabilities);
 
       this.microphoneStream = stream;
-      this.microphoneContext = new AudioContext({ sampleRate: 16000 });
+
+      // Create AudioContext with native sample rate - send directly to Deepgram
+      this.microphoneContext = new AudioContext({
+        sampleRate: settings.sampleRate,
+      });
       const source = this.microphoneContext.createMediaStreamSource(stream);
 
+      console.log(
+        `🎤 [Microphone] AudioContext created at ${this.microphoneContext.sampleRate} Hz (native rate - no resampling needed)`
+      );
+
+      // Store sample rate for later use
+      this.microphoneSampleRate = this.microphoneContext.sampleRate;
+
       // Create a script processor to capture audio data
+      // Use smaller buffer for lower latency
       this.microphoneProcessor = this.microphoneContext.createScriptProcessor(
         4096,
         1,
@@ -94,11 +107,17 @@ class AudioCapture {
             chunkCount++;
           }
 
-          // Convert Float32Array to Int16Array for Deepgram
+          // Convert Float32Array to Int16Array for Deepgram (no resampling!)
           const int16Data = this.floatTo16BitPCM(inputData);
           // Convert to Uint8Array for better IPC compatibility
           const uint8Data = new Uint8Array(int16Data.buffer);
-          onAudioData(uint8Data.buffer, "microphone");
+
+          // Send audio data with sample rate info
+          onAudioData(
+            uint8Data.buffer,
+            "microphone",
+            this.microphoneSampleRate
+          );
         }
       };
 
@@ -452,6 +471,34 @@ class AudioCapture {
       int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
     return int16Array;
+  }
+
+  // Resample audio from one sample rate to another (simple linear interpolation)
+  resampleAudio(audioData, fromSampleRate, toSampleRate) {
+    if (fromSampleRate === toSampleRate) {
+      return audioData;
+    }
+
+    const ratio = fromSampleRate / toSampleRate;
+    const newLength = Math.round(audioData.length / ratio);
+    const result = new Float32Array(newLength);
+
+    for (let i = 0; i < newLength; i++) {
+      const srcIndex = i * ratio;
+      const srcIndexInt = Math.floor(srcIndex);
+      const fraction = srcIndex - srcIndexInt;
+
+      if (srcIndexInt + 1 < audioData.length) {
+        // Linear interpolation between samples
+        result[i] =
+          audioData[srcIndexInt] * (1 - fraction) +
+          audioData[srcIndexInt + 1] * fraction;
+      } else {
+        result[i] = audioData[srcIndexInt];
+      }
+    }
+
+    return result;
   }
 
   // Get available audio devices

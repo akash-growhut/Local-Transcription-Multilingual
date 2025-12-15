@@ -169,9 +169,9 @@ async function startMicrophone() {
 
     // Start audio capture
     const audioResult = await audioCapture.startMicrophoneCapture(
-      (audioData, source) => {
-        // Send audio data to Deepgram via main process
-        window.electronAPI.sendAudioData(audioData, source);
+      (audioData, source, sampleRate) => {
+        // Send audio data to Deepgram via main process with sample rate
+        window.electronAPI.sendAudioData(audioData, source, sampleRate);
       }
     );
 
