@@ -162,13 +162,13 @@ function saveAudioChunksAsMP3() {
     __dirname,
     "..",
     "temp_audio",
-    `audio_${uniqueId}.raw`
+    `speaker_audio_${uniqueId}.raw`
   );
   const mp3FilePath = path.join(
     __dirname,
     "..",
     "temp_audio",
-    `audio_${uniqueId}.mp3`
+    `speaker_audio_${uniqueId}.mp3`
   );
 
   // Track file index for sequential display (start at 0)
