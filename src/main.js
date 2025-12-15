@@ -31,7 +31,7 @@ let audioChunks = [];
 let audioChunkCount = 0;
 let currentAudioFile = null;
 let audioStartTime = null;
-const CHUNKS_PER_FILE = 75; // ~1.5 seconds of audio (75 chunks * 20ms = 1.5s)
+const SPEAKER_CHUNKS_PER_FILE = 75; // ~1.5 seconds of audio (75 chunks * 20ms = 1.5s)
 
 // Function to transcribe audio file with Deepgram using raw PCM data
 async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
@@ -173,7 +173,7 @@ function saveAudioChunksAsMP3() {
 
   // Track file index for sequential display (start at 0)
   const fileIndex = Math.floor(
-    (audioChunkCount - audioChunks.length) / CHUNKS_PER_FILE
+    (audioChunkCount - audioChunks.length) / SPEAKER_CHUNKS_PER_FILE
   );
 
   // Save raw PCM data
@@ -503,7 +503,7 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
               audioChunkCount++;
 
               // Save as MP3 file every N chunks
-              if (audioChunkCount % CHUNKS_PER_FILE === 0) {
+              if (audioChunkCount % SPEAKER_CHUNKS_PER_FILE === 0) {
                 saveAudioChunksAsMP3();
               }
 
@@ -570,7 +570,9 @@ ipcMain.handle("stop-speaker-capture", async () => {
 
   // Save any remaining audio chunks
   if (audioChunks.length > 0) {
-    const finalFileIndex = Math.floor(audioChunkCount / CHUNKS_PER_FILE);
+    const finalFileIndex = Math.floor(
+      audioChunkCount / SPEAKER_CHUNKS_PER_FILE
+    );
     saveAudioChunksAsMP3();
     console.log(`💾 Saved final audio file (${audioChunks.length} chunks)`);
   }
