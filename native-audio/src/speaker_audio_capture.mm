@@ -236,16 +236,79 @@ AudioCaptureAddon::AudioCaptureAddon(const Napi::CallbackInfo& info)
 }
 
 AudioCaptureAddon::~AudioCaptureAddon() {
-    Stop(Napi::CallbackInfo(Env(), {}));
+    NSLog(@"🧹 Destructor called, cleaning up...");
+    
+    // Clear global instance pointer if it points to us
+    if (g_captureInstance == this) {
+        g_captureInstance = nullptr;
+    }
+    
+    // Stop capture synchronously
+    if (isCapturing_ && stream_) {
+        isCapturing_ = false;
+        __block BOOL stopCompleted = NO;
+        __block SCStream* streamToStop = stream_;
+        
+        // Check if we're on the main thread to avoid deadlock
+        if ([NSThread isMainThread]) {
+            // Already on main thread, execute directly
+            @autoreleasepool {
+                if (streamToStop) {
+                    [streamToStop stopCaptureWithCompletionHandler:^(NSError* error) {
+                        if (error) {
+                            NSLog(@"⚠️ Error stopping capture in destructor: %@", error.localizedDescription);
+                        }
+                        stopCompleted = YES;
+                    }];
+                    
+                    // Wait a bit for completion
+                    NSDate* timeout = [NSDate dateWithTimeIntervalSinceNow:0.3];
+                    while (!stopCompleted && [timeout timeIntervalSinceNow] > 0) {
+                        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+                    }
+                }
+            }
+        } else {
+            // Not on main thread, use dispatch_async (can't use sync from destructor)
+            dispatch_async(dispatch_get_main_queue(), ^{
+                @autoreleasepool {
+                    if (streamToStop) {
+                        [streamToStop stopCaptureWithCompletionHandler:^(NSError* error) {
+                            if (error) {
+                                NSLog(@"⚠️ Error stopping capture in destructor: %@", error.localizedDescription);
+                            }
+                        }];
+                    }
+                }
+            });
+            // Brief sleep to give async call a chance to start
+            usleep(50000); // 50ms
+        }
+    }
+    
+    // Clear references
+    stream_ = nil;
+    outputHandler_ = nil;
+    
     // Release thread-safe function if it was created
     try {
-        tsfn_.Release();
+        if (tsfn_) {
+            tsfn_.Release();
+        }
     } catch (...) {
         // Ignore errors during cleanup
+        NSLog(@"⚠️ Error releasing thread-safe function in destructor");
     }
+    
+    NSLog(@"✅ Destructor completed");
 }
 
 void AudioCaptureAddon::OnAudioData(const float* data, size_t length) {
+    // Check if we're still capturing
+    if (!isCapturing_) {
+        return;
+    }
+    
     if (length == 0 || !data) {
         return;
     }
@@ -254,7 +317,12 @@ void AudioCaptureAddon::OnAudioData(const float* data, size_t length) {
     std::vector<float> audioData(data, data + length);
     
     try {
-        tsfn_.BlockingCall([audioData](Napi::Env env, Napi::Function jsCallback) {
+        // Check if thread-safe function is valid before calling
+        if (!tsfn_) {
+            return;
+        }
+        
+        tsfn_.NonBlockingCall([audioData](Napi::Env env, Napi::Function jsCallback) {
             try {
                 if (jsCallback.IsEmpty() || jsCallback.IsUndefined()) {
                     return;
@@ -271,10 +339,9 @@ void AudioCaptureAddon::OnAudioData(const float* data, size_t length) {
         });
     } catch (const Napi::Error& e) {
         // This can happen if the thread-safe function is invalid
-        // Log it but don't crash
-        NSLog(@"⚠️ Error calling thread-safe function: %s", e.Message().c_str());
+        // Don't log here as it's expected during shutdown
     } catch (const std::exception& e) {
-        NSLog(@"⚠️ Exception in OnAudioData: %s", e.what());
+        // Don't log here as it's expected during shutdown
     } catch (...) {
         // Ignore other errors
     }
@@ -348,12 +415,13 @@ void AudioCaptureAddon::StartCaptureAsync() {
                             config.channelCount = 1;
                             NSLog(@"⚙️ Stream config: audio=YES, sampleRate=16000, channels=1");
                             
-                            // Create output handler with strong reference
+                            // Create output handler with weak reference check
                             StreamOutputHandler* handler = [[StreamOutputHandler alloc] init];
-                            AudioCaptureAddon* handlerSelf = blockSelf;
                             handler.callback = ^(const float* data, size_t length) {
-                                if (handlerSelf && length > 0) {
-                                    handlerSelf->OnAudioData(data, length);
+                                // Use global instance pointer and check if still valid
+                                AudioCaptureAddon* instance = g_captureInstance;
+                                if (instance && instance->isCapturing_ && length > 0) {
+                                    instance->OnAudioData(data, length);
                                 }
                             };
                             
@@ -458,26 +526,76 @@ Napi::Value AudioCaptureAddon::Stop(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
     if (!isCapturing_) {
+        NSLog(@"⚠️ Stop called but not capturing");
         return env.Undefined();
     }
     
+    NSLog(@"🛑 Stopping capture...");
+    
+    // Mark as not capturing immediately to stop callbacks
+    isCapturing_ = false;
+    
     if (stream_) {
         __block SCStream* streamToStop = stream_;
-        dispatch_async(dispatch_get_main_queue(), ^{
+        __block BOOL stopCompleted = NO;
+        
+        // Check if we're on the main queue
+        if ([NSThread isMainThread]) {
+            // Already on main thread, execute directly
             @autoreleasepool {
                 [streamToStop stopCaptureWithCompletionHandler:^(NSError* error) {
                     if (error) {
-                        NSLog(@"Error stopping capture: %@", error.localizedDescription);
+                        NSLog(@"⚠️ Error stopping capture: %@", error.localizedDescription);
+                    } else {
+                        NSLog(@"✅ Stream stopped successfully");
                     }
+                    stopCompleted = YES;
                 }];
+                
+                // Wait for completion with timeout
+                NSDate* timeout = [NSDate dateWithTimeIntervalSinceNow:0.5];
+                while (!stopCompleted && [timeout timeIntervalSinceNow] > 0) {
+                    [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+                }
+                
+                if (!stopCompleted) {
+                    NSLog(@"⚠️ Stop completion handler timed out, continuing anyway");
+                }
             }
-        });
+        } else {
+            // Not on main thread, use dispatch_sync
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                @autoreleasepool {
+                    [streamToStop stopCaptureWithCompletionHandler:^(NSError* error) {
+                        if (error) {
+                            NSLog(@"⚠️ Error stopping capture: %@", error.localizedDescription);
+                        } else {
+                            NSLog(@"✅ Stream stopped successfully");
+                        }
+                        stopCompleted = YES;
+                    }];
+                    
+                    // Wait for completion with timeout
+                    NSDate* timeout = [NSDate dateWithTimeIntervalSinceNow:0.5];
+                    while (!stopCompleted && [timeout timeIntervalSinceNow] > 0) {
+                        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+                    }
+                    
+                    if (!stopCompleted) {
+                        NSLog(@"⚠️ Stop completion handler timed out, continuing anyway");
+                    }
+                }
+            });
+        }
+        
+        // Small delay to ensure all callbacks have finished
+        usleep(50000); // 50ms
     }
     
-    isCapturing_ = false;
     stream_ = nil;
     outputHandler_ = nil;
     
+    NSLog(@"✅ Stop completed");
     return env.Undefined();
 }
 

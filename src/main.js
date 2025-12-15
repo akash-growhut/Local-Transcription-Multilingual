@@ -799,91 +799,105 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
     // Try to start native audio capture if available (macOS)
     if (NativeAudioCapture && process.platform === "darwin") {
       try {
-        if (!nativeAudioCapture) {
-          let audioSampleCount = 0;
-
-          // Initialize audio saving
-          audioChunks = [];
-          audioChunkCount = 0;
-          audioStartTime = Date.now();
-          console.log(`💾 Will save audio as MP3 files with unique names`);
-
-          nativeAudioCapture = new NativeAudioCapture((audioBuffer) => {
-            // audioBuffer is a Node Buffer of float32 PCM from native
-            // Reinterpret bytes as Float32Array without copying per-element
-            const byteOffset = audioBuffer.byteOffset || 0;
-            const byteLength =
-              audioBuffer.byteLength - (audioBuffer.byteLength % 4);
-            const floatData = new Float32Array(
-              audioBuffer.buffer,
-              byteOffset,
-              byteLength / 4
-            );
-            const int16Data = new Int16Array(floatData.length);
-            let hasNonZero = false;
-            let absSum = 0;
-
-            for (let i = 0; i < floatData.length; i++) {
-              const s = Math.max(-1, Math.min(1, floatData[i]));
-              const sample =
-                s < 0 ? Math.round(s * 32768) : Math.round(s * 32767);
-              int16Data[i] = sample;
-              absSum += sample * sample;
-              if (sample !== 0) hasNonZero = true;
-            }
-            const rms = Math.sqrt(absSum / int16Data.length) || 0;
-
-            // Log first few samples
-            if (audioSampleCount < 5) {
-              const maxVal = Math.max(...Array.from(int16Data.slice(0, 100)));
-              const minVal = Math.min(...Array.from(int16Data.slice(0, 100)));
-              console.log(
-                `📊 Audio sample ${audioSampleCount}: ${
-                  int16Data.length
-                } samples, range: [${minVal}, ${maxVal}], hasNonZero: ${hasNonZero}, rms≈${rms.toFixed(
-                  2
-                )}`
-              );
-              audioSampleCount++;
-            }
-
-            // Send to Deepgram
-            if (speakerConnection && speakerReady) {
-              const buffer = Buffer.from(
-                int16Data.buffer,
-                int16Data.byteOffset,
-                int16Data.byteLength
-              );
-
-              // Save chunk to array
-              audioChunks.push(buffer);
-              audioChunkCount++;
-
-              // Save as MP3 file every N chunks
-              if (audioChunkCount % SPEAKER_CHUNKS_PER_FILE === 0) {
-                saveAudioChunksAsMP3();
-              }
-
-              try {
-                speakerConnection.send(buffer);
-                speakerSendCount++;
-                if (speakerSendCount <= 5) {
-                  console.log(
-                    `📤 Sent audio chunk ${speakerSendCount}, size=${
-                      buffer.length
-                    } bytes, rms≈${rms.toFixed(2)}`
-                  );
-                }
-              } catch (error) {
-                console.error("❌ Error sending to Deepgram:", error);
-              }
-            } else {
-              if (audioSampleCount === 1) {
-                console.log("⚠️ Speaker connection not ready or not open yet");
-              }
-            }
-          });
+        // Always create a fresh instance to avoid state issues
+        if (nativeAudioCapture) {
+          console.log(
+            "⚠️ Cleaning up existing native audio capture instance..."
+          );
+          try {
+            nativeAudioCapture.stop();
+          } catch (e) {
+            console.log("⚠️ Error stopping existing instance:", e.message);
+          }
+          nativeAudioCapture = null;
+          // Small delay to ensure cleanup
+          await new Promise((resolve) => setTimeout(resolve, 100));
         }
+
+        let audioSampleCount = 0;
+
+        // Initialize audio saving
+        audioChunks = [];
+        audioChunkCount = 0;
+        audioStartTime = Date.now();
+        console.log(`💾 Will save audio as MP3 files with unique names`);
+
+        console.log("🎙️ Creating new native audio capture instance...");
+        nativeAudioCapture = new NativeAudioCapture((audioBuffer) => {
+          // audioBuffer is a Node Buffer of float32 PCM from native
+          // Reinterpret bytes as Float32Array without copying per-element
+          const byteOffset = audioBuffer.byteOffset || 0;
+          const byteLength =
+            audioBuffer.byteLength - (audioBuffer.byteLength % 4);
+          const floatData = new Float32Array(
+            audioBuffer.buffer,
+            byteOffset,
+            byteLength / 4
+          );
+          const int16Data = new Int16Array(floatData.length);
+          let hasNonZero = false;
+          let absSum = 0;
+
+          for (let i = 0; i < floatData.length; i++) {
+            const s = Math.max(-1, Math.min(1, floatData[i]));
+            const sample =
+              s < 0 ? Math.round(s * 32768) : Math.round(s * 32767);
+            int16Data[i] = sample;
+            absSum += sample * sample;
+            if (sample !== 0) hasNonZero = true;
+          }
+          const rms = Math.sqrt(absSum / int16Data.length) || 0;
+
+          // Log first few samples
+          if (audioSampleCount < 5) {
+            const maxVal = Math.max(...Array.from(int16Data.slice(0, 100)));
+            const minVal = Math.min(...Array.from(int16Data.slice(0, 100)));
+            console.log(
+              `📊 Audio sample ${audioSampleCount}: ${
+                int16Data.length
+              } samples, range: [${minVal}, ${maxVal}], hasNonZero: ${hasNonZero}, rms≈${rms.toFixed(
+                2
+              )}`
+            );
+            audioSampleCount++;
+          }
+
+          // Send to Deepgram
+          if (speakerConnection && speakerReady) {
+            const buffer = Buffer.from(
+              int16Data.buffer,
+              int16Data.byteOffset,
+              int16Data.byteLength
+            );
+
+            // Save chunk to array
+            audioChunks.push(buffer);
+            audioChunkCount++;
+
+            // Save as MP3 file every N chunks
+            if (audioChunkCount % SPEAKER_CHUNKS_PER_FILE === 0) {
+              saveAudioChunksAsMP3();
+            }
+
+            try {
+              speakerConnection.send(buffer);
+              speakerSendCount++;
+              if (speakerSendCount <= 5) {
+                console.log(
+                  `📤 Sent audio chunk ${speakerSendCount}, size=${
+                    buffer.length
+                  } bytes, rms≈${rms.toFixed(2)}`
+                );
+              }
+            } catch (error) {
+              console.error("❌ Error sending to Deepgram:", error);
+            }
+          } else {
+            if (audioSampleCount === 1) {
+              console.log("⚠️ Speaker connection not ready or not open yet");
+            }
+          }
+        });
 
         const result = nativeAudioCapture.start();
         if (result.success) {
@@ -935,11 +949,22 @@ ipcMain.handle("stop-microphone-capture", async () => {
 });
 
 ipcMain.handle("stop-speaker-capture", async () => {
+  console.log("🛑 Stopping speaker capture...");
+
   // Stop native audio capture if running
   if (nativeAudioCapture) {
-    nativeAudioCapture.stop();
+    try {
+      const stopResult = nativeAudioCapture.stop();
+      console.log("✅ Native audio capture stopped:", stopResult);
+    } catch (error) {
+      console.error("❌ Error stopping native audio capture:", error.message);
+    }
+
+    // Clear the reference to allow proper cleanup
     nativeAudioCapture = null;
-    console.log("✅ Native audio capture stopped");
+
+    // Give a small delay to ensure native cleanup is complete
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
 
   // Save any remaining audio chunks
@@ -955,9 +980,12 @@ ipcMain.handle("stop-speaker-capture", async () => {
     speakerConnection.finish();
     speakerConnection = null;
     speakerReady = false;
+    console.log("✅ Speaker Deepgram connection closed");
     return { success: true };
   }
-  return { success: false, error: "No active speaker connection" };
+
+  console.log("✅ Speaker capture stopped successfully");
+  return { success: true };
 });
 
 ipcMain.handle(

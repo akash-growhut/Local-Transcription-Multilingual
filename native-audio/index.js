@@ -60,9 +60,19 @@ class AudioCapture {
     try {
       this.capture.stop();
       this.isCapturing = false;
+
+      // Clear the reference to allow garbage collection
+      // This ensures the destructor is called before creating a new instance
       this.capture = null;
+
+      // Force garbage collection hint (not guaranteed but helpful)
+      if (global.gc) {
+        global.gc();
+      }
+
       return { success: true };
     } catch (error) {
+      this.capture = null;
       return { success: false, error: error.message };
     }
   }
