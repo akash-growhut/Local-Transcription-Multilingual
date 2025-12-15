@@ -607,8 +607,27 @@ const convertToMP3AndTranscribe = async (
         );
       }
 
-      // Keep 16kHz raw file for debugging
-      // Delete later if you want: fs.unlinkSync(rawFilePath);
+      // Delete temp 16kHz file
+      try {
+        fs.unlinkSync(rawFilePath);
+      } catch (e) {
+        console.log(
+          `⚠️ [Microphone] Could not delete 16kHz file: ${path.basename(
+            rawFilePath
+          )}`
+        );
+      }
+
+      // Delete temp MP3 file
+      try {
+        fs.unlinkSync(mp3FilePath);
+      } catch (e) {
+        console.log(
+          `⚠️ [Microphone] Could not delete MP3 file: ${path.basename(
+            mp3FilePath
+          )}`
+        );
+      }
     }
   });
 
