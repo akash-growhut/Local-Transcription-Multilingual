@@ -46,7 +46,7 @@ let microphoneAudioStartTime = null;
 // At 16kHz: 4096 samples = 256ms per chunk
 // For ~1.5 seconds: 1500ms / 256ms = ~6 chunks
 // We'll adjust dynamically based on actual sample rate
-const MICROPHONE_CHUNKS_PER_FILE = 30; // Will be recalculated based on actual sample rate
+const MICROPHONE_CHUNKS_PER_FILE = 75; // Will be recalculated based on actual sample rate
 
 // Function to transcribe audio file with Deepgram using raw PCM data (SPEAKER)
 async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
@@ -167,7 +167,7 @@ async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
   }
 }
 
-// Function to transcribe audio file with Deepgram using raw PCM data (MICROPHONE)
+// Function to transcribe audio file with Deepgram using MP3 file (MICROPHONE)
 async function transcribeMicrophoneMP3File(
   mp3FilePath,
   fileIndex,
@@ -189,22 +189,16 @@ async function transcribeMicrophoneMP3File(
       )}`
     );
 
-    // Verify raw file exists and has content
-    if (!fs.existsSync(rawFilePath)) {
-      console.error(`❌ [Microphone] Raw file does not exist: ${rawFilePath}`);
+    // Verify MP3 file exists
+    if (!fs.existsSync(mp3FilePath)) {
+      console.error(`❌ [Microphone] MP3 file does not exist: ${mp3FilePath}`);
       return;
     }
 
-    // Use raw PCM data instead of MP3 for better compatibility
-    // Read the raw PCM file (16-bit signed little-endian, 16kHz, mono)
-    const pcmBuffer = fs.readFileSync(rawFilePath);
+    // Read MP3 file as binary
+    const mp3Buffer = fs.readFileSync(mp3FilePath);
 
-    console.log(
-      `📊 [Microphone] Raw file size: ${pcmBuffer.length} bytes (${(
-        pcmBuffer.length /
-        (microphoneSampleRate * 2)
-      ).toFixed(2)}s at ${microphoneSampleRate}Hz mono 16-bit)`
-    );
+    console.log(`📊 [Microphone] MP3 file size: ${mp3Buffer.length} bytes`);
 
     // Get API key from the client
     const apiKey = deepgramClient.key;
@@ -213,27 +207,19 @@ async function transcribeMicrophoneMP3File(
       return;
     }
 
-    // Use Deepgram REST API directly for file transcription
-    // Send raw PCM data (linear16, 16kHz, mono) which we know works
-    const FormData = require("form-data");
-    const form = new FormData();
-    form.append("file", pcmBuffer, {
-      filename: path.basename(rawFilePath) || "audio.raw",
-      contentType: "audio/raw",
-      knownLength: pcmBuffer.length,
-    });
-
+    // Use Deepgram REST API - send MP3 directly with proper content type
     const options = {
       hostname: "api.deepgram.com",
-      path: "/v1/listen?model=nova-3&language=multi&smart_format=true&punctuate=true&encoding=linear16&sample_rate=16000&channels=1",
+      path: `/v1/listen?model=nova-3&language=multi&smart_format=true&punctuate=true`,
       method: "POST",
       headers: {
         Authorization: `Token ${apiKey}`,
-        ...form.getHeaders(),
+        "Content-Type": "audio/mp3",
+        "Content-Length": mp3Buffer.length,
       },
     };
 
-    console.log(`📡 [Microphone] Sending to Deepgram API...`);
+    console.log(`📡 [Microphone] Sending MP3 directly to Deepgram API...`);
 
     const response = await new Promise((resolve, reject) => {
       const req = https.request(options, (res) => {
@@ -255,13 +241,9 @@ async function transcribeMicrophoneMP3File(
         reject(error);
       });
 
-      // Handle form errors
-      form.on("error", (error) => {
-        reject(error);
-      });
-
-      // Pipe the form data to the request
-      form.pipe(req);
+      // Write MP3 buffer directly to request
+      req.write(mp3Buffer);
+      req.end();
     });
 
     console.log(
@@ -425,6 +407,12 @@ function saveMicrophoneAudioChunksAsMP3() {
 
   const timestamp = Date.now();
   const uniqueId = `${timestamp}_${Math.random().toString(36).substr(2, 9)}`;
+  const rawFilePath48k = path.join(
+    __dirname,
+    "..",
+    "temp_audio",
+    `microphone_audio_${uniqueId}_48k.raw`
+  );
   const rawFilePath = path.join(
     __dirname,
     "..",
@@ -444,13 +432,96 @@ function saveMicrophoneAudioChunksAsMP3() {
       MICROPHONE_CHUNKS_PER_FILE
   );
 
-  // Save raw PCM data
+  // Save raw PCM data at original sample rate (48kHz)
   const rawData = Buffer.concat(microphoneAudioChunks);
   const chunkCount = microphoneAudioChunks.length; // Store before clearing
-  fs.writeFileSync(rawFilePath, rawData);
+  fs.writeFileSync(rawFilePath48k, rawData);
 
-  // Convert to MP3 using ffmpeg (if available)
-  const ffmpegCmd = `ffmpeg -f s16le -ar ${microphoneSampleRate} -ac 1 -i "${rawFilePath}" -codec:a libmp3lame -b:a 128k "${mp3FilePath}" -y`;
+  console.log(
+    `💾 [Microphone] Saved 48kHz RAW: ${path.basename(
+      rawFilePath48k
+    )} (${chunkCount} chunks, ${(
+      rawData.length /
+      (microphoneSampleRate * 2)
+    ).toFixed(2)}s)`
+  );
+
+  // Resample from 48kHz to 16kHz using ffmpeg
+  const resampleCmd = `ffmpeg -f s16le -ar ${microphoneSampleRate} -ac 1 -i "${rawFilePath48k}" -f s16le -ar 16000 -ac 1 "${rawFilePath}" -y`;
+
+  exec(resampleCmd, async (error, stdout, stderr) => {
+    if (error) {
+      console.log(`⚠️ [Microphone] Could not resample audio: ${error.message}`);
+      // Delete temp file
+      try {
+        fs.unlinkSync(rawFilePath48k);
+      } catch (e) {}
+      return;
+    }
+
+    // Resampling successful
+    const stats16k = fs.statSync(rawFilePath);
+    console.log(
+      `✅ [Microphone] Resampled to 16kHz: ${path.basename(rawFilePath)} (${
+        stats16k.size
+      } bytes, ${(stats16k.size / 32000).toFixed(2)}s)`
+    );
+
+    // Apply volume normalization to boost quiet audio
+    const normalizedPath = path.join(
+      __dirname,
+      "..",
+      "temp_audio",
+      `microphone_audio_${uniqueId}_normalized.raw`
+    );
+
+    // Normalize audio to -3dB peak (loud enough for Deepgram)
+    const normalizeCmd = `ffmpeg -f s16le -ar 16000 -ac 1 -i "${rawFilePath}" -filter:a "loudnorm=I=-16:TP=-1.5:LRA=11" -f s16le -ar 16000 -ac 1 "${normalizedPath}" -y`;
+
+    exec(normalizeCmd, async (error2, stdout2, stderr2) => {
+      if (error2) {
+        console.log(
+          `⚠️ [Microphone] Could not normalize audio, using original: ${error2.message}`
+        );
+        // Continue with unnormalized audio
+        await convertToMP3AndTranscribe(
+          rawFilePath,
+          mp3FilePath,
+          fileIndex,
+          rawFilePath48k
+        );
+      } else {
+        // Check normalized audio levels
+        const statsNorm = fs.statSync(normalizedPath);
+        console.log(
+          `✅ [Microphone] Normalized audio: ${path.basename(
+            normalizedPath
+          )} (${statsNorm.size} bytes) - boosted to proper levels`
+        );
+
+        // Replace original with normalized version
+        fs.renameSync(normalizedPath, rawFilePath);
+
+        await convertToMP3AndTranscribe(
+          rawFilePath,
+          mp3FilePath,
+          fileIndex,
+          rawFilePath48k
+        );
+      }
+    });
+  });
+}
+
+// Helper function to convert to MP3 and transcribe
+const convertToMP3AndTranscribe = async (
+  rawFilePath,
+  mp3FilePath,
+  fileIndex,
+  rawFilePath48k
+) => {
+  // Convert 16kHz raw to MP3 using ffmpeg
+  const ffmpegCmd = `ffmpeg -f s16le -ar 16000 -ac 1 -i "${rawFilePath}" -codec:a libmp3lame -b:a 128k "${mp3FilePath}" -y`;
 
   exec(ffmpegCmd, async (error, stdout, stderr) => {
     if (error) {
@@ -458,50 +529,47 @@ function saveMicrophoneAudioChunksAsMP3() {
         `⚠️ [Microphone] Could not convert to MP3 (ffmpeg not found?): ${error.message}`
       );
       console.log(`💾 [Microphone] Saved raw audio to: ${rawFilePath}`);
-      console.log(
-        `📝 [Microphone] To convert manually: ffmpeg -f s16le -ar ${microphoneSampleRate} -ac 1 -i ${rawFilePath} ${mp3FilePath}`
-      );
     } else {
-      // MP3 conversion successful
+      // MP3 conversion successful - wait a bit for file to be fully written
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Verify MP3 file exists and has content
+      if (!fs.existsSync(mp3FilePath)) {
+        console.error(
+          `❌ [Microphone] MP3 file was not created: ${mp3FilePath}`
+        );
+        return;
+      }
+
+      const mp3Stats = fs.statSync(mp3FilePath);
       console.log(
-        `💾 [Microphone] Saved MP3: ${path.basename(
-          mp3FilePath
-        )} (${chunkCount} chunks, ${(
-          rawData.length /
-          (microphoneSampleRate * 2)
-        ).toFixed(2)}s at ${microphoneSampleRate}Hz)`
+        `💾 [Microphone] Saved MP3: ${path.basename(mp3FilePath)} (${
+          mp3Stats.size
+        } bytes, 16kHz)`
       );
 
-      // Transcribe using raw PCM data (before deleting it)
+      // Transcribe using 16kHz RAW PCM file
       await transcribeMicrophoneMP3File(mp3FilePath, fileIndex, rawFilePath);
 
-      // Delete raw file after transcription
+      // Delete temp 48kHz file
       try {
-        fs.unlinkSync(rawFilePath);
+        fs.unlinkSync(rawFilePath48k);
       } catch (e) {
         console.log(
-          `⚠️ [Microphone] Could not delete raw file: ${path.basename(
-            rawFilePath
+          `⚠️ [Microphone] Could not delete 48kHz file: ${path.basename(
+            rawFilePath48k
           )}`
         );
       }
 
-      // // Delete MP3 file after transcription
-      // try {
-      //   fs.unlinkSync(mp3FilePath);
-      // } catch (e) {
-      //   console.log(
-      //     `⚠️ [Microphone] Could not delete MP3 file: ${path.basename(
-      //       mp3FilePath
-      //     )}`
-      //   );
-      // }
+      // Keep 16kHz raw file for debugging
+      // Delete later if you want: fs.unlinkSync(rawFilePath);
     }
   });
 
   // Clear chunks for next file
   microphoneAudioChunks = [];
-}
+};
 
 // Initialize Deepgram client
 function initializeDeepgram(apiKey) {
