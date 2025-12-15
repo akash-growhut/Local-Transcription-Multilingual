@@ -2,13 +2,15 @@
 let nativeModule = null;
 
 try {
-  if (process.platform === 'darwin') {
-    nativeModule = require('./build/Release/audio_capture.node');
+  if (process.platform === "darwin") {
+    nativeModule = require("./build/Release/speaker_audio_capture.node");
   }
 } catch (error) {
-  console.warn('Native audio capture module not available:', error.message);
-  console.warn('Falling back to web API method');
-  console.warn('To build the native module, run: cd native-audio && npm install && npm run rebuild');
+  console.warn("Native audio capture module not available:", error.message);
+  console.warn("Falling back to web API method");
+  console.warn(
+    "To build the native module, run: cd native-audio && npm install && npm run rebuild"
+  );
 }
 
 class AudioCapture {
@@ -24,22 +26,26 @@ class AudioCapture {
 
   start(callback) {
     if (!this.isAvailable()) {
-      return { success: false, error: 'Native module not available. Build it with: cd native-audio && npm install && npm run rebuild' };
+      return {
+        success: false,
+        error:
+          "Native module not available. Build it with: cd native-audio && npm install && npm run rebuild",
+      };
     }
 
     try {
       // Use provided callback or stored one
       const cb = callback || this.audioCallback;
       if (!cb) {
-        return { success: false, error: 'No callback provided' };
+        return { success: false, error: "No callback provided" };
       }
 
       // Create capture instance with callback
       this.capture = new nativeModule.AudioCapture(cb);
-      
+
       const result = this.capture.start();
       this.isCapturing = result;
-      
+
       return { success: result };
     } catch (error) {
       return { success: false, error: error.message };
@@ -74,4 +80,3 @@ class AudioCapture {
 }
 
 module.exports = AudioCapture;
-

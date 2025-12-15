@@ -21,7 +21,7 @@ npm install
 npm run rebuild
 ```
 
-This will create `build/Release/audio_capture.node`
+This will create `build/Release/speaker_audio_capture.node`
 
 ## Requirements
 

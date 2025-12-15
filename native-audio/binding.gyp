@@ -1,9 +1,9 @@
 {
   "targets": [
     {
-      "target_name": "audio_capture",
+      "target_name": "speaker_audio_capture",
       "sources": [
-        "src/audio_capture.mm"
+        "src/speaker_audio_capture.mm"
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")"

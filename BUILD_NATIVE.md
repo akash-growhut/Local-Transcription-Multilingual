@@ -25,7 +25,7 @@ npm install
 npm run rebuild
 ```
 
-This will compile the Objective-C++ code and create `build/Release/audio_capture.node`
+This will compile the Objective-C++ code and create `build/Release/speaker_audio_capture.node`
 
 ## First-Time Setup
 
