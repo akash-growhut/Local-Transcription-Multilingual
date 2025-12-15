@@ -26,14 +26,24 @@ let speakerConnection = null;
 let speakerReady = false;
 let speakerSendCount = 0;
 
-// File stream for saving audio chunks
+// File stream for saving audio chunks - SPEAKER
 let audioChunks = [];
 let audioChunkCount = 0;
 let currentAudioFile = null;
 let audioStartTime = null;
+// Speaker uses native audio: 320 float32 samples at 16kHz = 20ms per chunk
+// For 1.5 seconds: 1500ms / 20ms = 75 chunks
 const SPEAKER_CHUNKS_PER_FILE = 75; // ~1.5 seconds of audio (75 chunks * 20ms = 1.5s)
 
-// Function to transcribe audio file with Deepgram using raw PCM data
+// File stream for saving audio chunks - MICROPHONE
+let microphoneAudioChunks = [];
+let microphoneAudioChunkCount = 0;
+let microphoneAudioStartTime = null;
+// Microphone uses Web Audio ScriptProcessor: 4096 samples at 16kHz = 256ms per chunk
+// For 1.5 seconds: 1500ms / 256ms = ~6 chunks
+const MICROPHONE_CHUNKS_PER_FILE = 6; // ~1.5 seconds of audio (6 chunks * 256ms = 1.536s)
+
+// Function to transcribe audio file with Deepgram using raw PCM data (SPEAKER)
 async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
   if (!deepgramClient) {
     console.log(
@@ -152,7 +162,137 @@ async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
   }
 }
 
-// Function to save audio chunks as MP3
+// Function to transcribe audio file with Deepgram using raw PCM data (MICROPHONE)
+async function transcribeMicrophoneMP3File(
+  mp3FilePath,
+  fileIndex,
+  rawFilePath
+) {
+  if (!deepgramClient) {
+    console.log(
+      `⚠️ [Microphone] Deepgram client not initialized, skipping transcription for ${path.basename(
+        mp3FilePath
+      )}`
+    );
+    return;
+  }
+
+  try {
+    console.log(
+      `🎤 [Microphone] Transcribing audio file ${fileIndex}: ${path.basename(
+        mp3FilePath
+      )}`
+    );
+
+    // Use raw PCM data instead of MP3 for better compatibility
+    // Read the raw PCM file (16-bit signed little-endian, 16kHz, mono)
+    const pcmBuffer = fs.readFileSync(rawFilePath);
+
+    // Get API key from the client
+    const apiKey = deepgramClient.key;
+    if (!apiKey) {
+      console.error(`❌ [Microphone] Deepgram API key not found`);
+      return;
+    }
+
+    // Use Deepgram REST API directly for file transcription
+    // Send raw PCM data (linear16, 16kHz, mono) which we know works
+    const FormData = require("form-data");
+    const form = new FormData();
+    form.append("file", pcmBuffer, {
+      filename: path.basename(rawFilePath) || "audio.raw",
+      contentType: "audio/raw",
+      knownLength: pcmBuffer.length,
+    });
+
+    const options = {
+      hostname: "api.deepgram.com",
+      path: "/v1/listen?model=nova-3&language=multi&smart_format=true&punctuate=true&encoding=linear16&sample_rate=16000&channels=1",
+      method: "POST",
+      headers: {
+        Authorization: `Token ${apiKey}`,
+        ...form.getHeaders(),
+      },
+    };
+
+    const response = await new Promise((resolve, reject) => {
+      const req = https.request(options, (res) => {
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          try {
+            const result = JSON.parse(data);
+            resolve({ statusCode: res.statusCode, data: result });
+          } catch (e) {
+            reject(new Error(`Failed to parse response: ${e.message}`));
+          }
+        });
+      });
+
+      req.on("error", (error) => {
+        reject(error);
+      });
+
+      // Handle form errors
+      form.on("error", (error) => {
+        reject(error);
+      });
+
+      // Pipe the form data to the request
+      form.pipe(req);
+    });
+
+    if (response.statusCode !== 200) {
+      console.error(
+        `❌ [Microphone] Deepgram API error (${response.statusCode}):`,
+        response.data
+      );
+      return;
+    }
+
+    const transcript =
+      response.data?.results?.channels?.[0]?.alternatives?.[0]?.transcript;
+    if (transcript) {
+      console.log(`💬 [Microphone] Transcript ${fileIndex}: "${transcript}"`);
+
+      // Send transcript to renderer for display (in series order)
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        const transcriptData = {
+          text: transcript,
+          isFinal: true,
+          source: "microphone",
+          fileIndex: fileIndex,
+          timestamp: Date.now(),
+        };
+        console.log(
+          `📤 [Microphone] Sending transcript to renderer:`,
+          transcriptData
+        );
+        mainWindow.webContents.send("transcript", transcriptData);
+        console.log(`✅ [Microphone] Transcript sent to renderer`);
+      } else {
+        console.log(
+          `❌ [Microphone] Cannot send transcript: mainWindow not available`
+        );
+      }
+    } else {
+      console.log(
+        `⚠️ [Microphone] No transcript found in Deepgram result for ${path.basename(
+          mp3FilePath
+        )}`
+      );
+    }
+  } catch (error) {
+    console.error(
+      `❌ [Microphone] Error transcribing ${path.basename(mp3FilePath)}:`,
+      error.message
+    );
+  }
+}
+
+// Function to save audio chunks as MP3 (SPEAKER)
 function saveAudioChunksAsMP3() {
   if (audioChunks.length === 0) return;
 
@@ -225,6 +365,87 @@ function saveAudioChunksAsMP3() {
 
   // Clear chunks for next file
   audioChunks = [];
+}
+
+// Function to save audio chunks as MP3 (MICROPHONE)
+function saveMicrophoneAudioChunksAsMP3() {
+  if (microphoneAudioChunks.length === 0) return;
+
+  const timestamp = Date.now();
+  const uniqueId = `${timestamp}_${Math.random().toString(36).substr(2, 9)}`;
+  const rawFilePath = path.join(
+    __dirname,
+    "..",
+    "temp_audio",
+    `microphone_audio_${uniqueId}.raw`
+  );
+  const mp3FilePath = path.join(
+    __dirname,
+    "..",
+    "temp_audio",
+    `microphone_audio_${uniqueId}.mp3`
+  );
+
+  // Track file index for sequential display (start at 0)
+  const fileIndex = Math.floor(
+    (microphoneAudioChunkCount - microphoneAudioChunks.length) /
+      MICROPHONE_CHUNKS_PER_FILE
+  );
+
+  // Save raw PCM data
+  const rawData = Buffer.concat(microphoneAudioChunks);
+  const chunkCount = microphoneAudioChunks.length; // Store before clearing
+  fs.writeFileSync(rawFilePath, rawData);
+
+  // Convert to MP3 using ffmpeg (if available)
+  const ffmpegCmd = `ffmpeg -f s16le -ar 16000 -ac 1 -i "${rawFilePath}" -codec:a libmp3lame -b:a 128k "${mp3FilePath}" -y`;
+
+  exec(ffmpegCmd, async (error, stdout, stderr) => {
+    if (error) {
+      console.log(
+        `⚠️ [Microphone] Could not convert to MP3 (ffmpeg not found?): ${error.message}`
+      );
+      console.log(`💾 [Microphone] Saved raw audio to: ${rawFilePath}`);
+      console.log(
+        `📝 [Microphone] To convert manually: ffmpeg -f s16le -ar 16000 -ac 1 -i ${rawFilePath} ${mp3FilePath}`
+      );
+    } else {
+      // MP3 conversion successful
+      console.log(
+        `💾 [Microphone] Saved MP3: ${path.basename(
+          mp3FilePath
+        )} (${chunkCount} chunks, ${(rawData.length / 32000).toFixed(2)}s)`
+      );
+
+      // Transcribe using raw PCM data (before deleting it)
+      await transcribeMicrophoneMP3File(mp3FilePath, fileIndex, rawFilePath);
+
+      // Delete raw file after transcription
+      try {
+        fs.unlinkSync(rawFilePath);
+      } catch (e) {
+        console.log(
+          `⚠️ [Microphone] Could not delete raw file: ${path.basename(
+            rawFilePath
+          )}`
+        );
+      }
+
+      // Delete MP3 file after transcription
+      try {
+        fs.unlinkSync(mp3FilePath);
+      } catch (e) {
+        console.log(
+          `⚠️ [Microphone] Could not delete MP3 file: ${path.basename(
+            mp3FilePath
+          )}`
+        );
+      }
+    }
+  });
+
+  // Clear chunks for next file
+  microphoneAudioChunks = [];
 }
 
 // Initialize Deepgram client
@@ -405,6 +626,19 @@ ipcMain.handle("initialize-deepgram", async (event, apiKey) => {
 
 ipcMain.handle("start-microphone-capture", async (event, apiKey) => {
   try {
+    // Initialize Deepgram client for file transcription
+    if (!deepgramClient) {
+      deepgramClient = initializeDeepgram(apiKey);
+    }
+
+    // Initialize microphone audio saving
+    microphoneAudioChunks = [];
+    microphoneAudioChunkCount = 0;
+    microphoneAudioStartTime = Date.now();
+    console.log(
+      `💾 [Microphone] Will save audio as MP3 files with unique names`
+    );
+
     microphoneConnection = createMicrophoneConnection(
       apiKey,
       (transcript, isFinal, source) => {
@@ -552,6 +786,17 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
 });
 
 ipcMain.handle("stop-microphone-capture", async () => {
+  // Save any remaining microphone audio chunks
+  if (microphoneAudioChunks.length > 0) {
+    const finalFileIndex = Math.floor(
+      microphoneAudioChunkCount / MICROPHONE_CHUNKS_PER_FILE
+    );
+    saveMicrophoneAudioChunksAsMP3();
+    console.log(
+      `💾 [Microphone] Saved final audio file (${microphoneAudioChunks.length} chunks)`
+    );
+  }
+
   if (microphoneConnection) {
     microphoneConnection.finish();
     microphoneConnection = null;
@@ -594,6 +839,57 @@ ipcMain.handle("send-audio-data", async (event, audioData, source) => {
       // Convert ArrayBuffer to Buffer for Node.js
       const buffer = Buffer.from(audioData);
       connection.send(buffer);
+
+      // Save microphone audio chunks to file
+      if (source === "microphone") {
+        microphoneAudioChunks.push(buffer);
+        microphoneAudioChunkCount++;
+
+        // Log first few chunks for debugging with audio quality info
+        if (microphoneAudioChunkCount <= 3) {
+          // Analyze audio quality
+          const int16View = new Int16Array(
+            buffer.buffer,
+            buffer.byteOffset,
+            buffer.length / 2
+          );
+          let sum = 0;
+          let peak = 0;
+          let nonZeroCount = 0;
+
+          for (let i = 0; i < int16View.length; i++) {
+            const abs = Math.abs(int16View[i]);
+            sum += abs;
+            if (abs > peak) peak = abs;
+            if (abs > 0) nonZeroCount++;
+          }
+
+          const avg = sum / int16View.length;
+          const rms = Math.sqrt(
+            int16View.reduce((s, v) => s + v * v, 0) / int16View.length
+          );
+
+          console.log(`📊 [Microphone] Chunk ${microphoneAudioChunkCount}:`, {
+            bytes: buffer.length,
+            samples: int16View.length,
+            avg: avg.toFixed(2),
+            rms: rms.toFixed(2),
+            peak: peak,
+            nonZero: nonZeroCount,
+            percentNonZero:
+              ((nonZeroCount / int16View.length) * 100).toFixed(2) + "%",
+          });
+        }
+
+        // Save as MP3 file every N chunks
+        if (microphoneAudioChunkCount % MICROPHONE_CHUNKS_PER_FILE === 0) {
+          console.log(
+            `📦 [Microphone] Reached ${microphoneAudioChunkCount} chunks, saving to file...`
+          );
+          saveMicrophoneAudioChunksAsMP3();
+        }
+      }
+
       return { success: true };
     }
     return { success: false, error: "Connection not ready" };

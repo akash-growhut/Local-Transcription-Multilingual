@@ -15,30 +15,90 @@ class AudioCapture {
   // Start microphone capture
   async startMicrophoneCapture(onAudioData) {
     try {
+      // First, list available microphones
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(
+        (device) => device.kind === "audioinput"
+      );
+
+      console.log("🎤 [Microphone] Available audio input devices:");
+      audioInputs.forEach((device, index) => {
+        console.log(
+          `  ${index + 1}. ${
+            device.label || "Unnamed device"
+          } (${device.deviceId.substring(0, 20)}...)`
+        );
+      });
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
         },
       });
+
+      // Log which microphone is being used
+      const audioTrack = stream.getAudioTracks()[0];
+      const settings = audioTrack.getSettings();
+      const capabilities = audioTrack.getCapabilities();
+
+      console.log("🎤 [Microphone] Device selected:", audioTrack.label);
+      console.log("🎤 [Microphone] Settings:", {
+        sampleRate: settings.sampleRate,
+        channelCount: settings.channelCount,
+        echoCancellation: settings.echoCancellation,
+        noiseSuppression: settings.noiseSuppression,
+        autoGainControl: settings.autoGainControl,
+        deviceId: settings.deviceId,
+      });
+      console.log("🎤 [Microphone] Capabilities:", capabilities);
 
       this.microphoneStream = stream;
       this.microphoneContext = new AudioContext({ sampleRate: 16000 });
       const source = this.microphoneContext.createMediaStreamSource(stream);
 
       // Create a script processor to capture audio data
-      this.microphoneProcessor = this.microphoneContext.createScriptProcessor(4096, 1, 1);
-      
+      this.microphoneProcessor = this.microphoneContext.createScriptProcessor(
+        4096,
+        1,
+        1
+      );
+
+      let chunkCount = 0;
+
       this.microphoneProcessor.onaudioprocess = (e) => {
         if (this.isMicrophoneCapturing) {
           const inputData = e.inputBuffer.getChannelData(0);
+
+          // Log audio quality for first few chunks
+          if (chunkCount < 5) {
+            const rms = Math.sqrt(
+              inputData.reduce((sum, val) => sum + val * val, 0) /
+                inputData.length
+            );
+            const peak = Math.max(...Array.from(inputData).map(Math.abs));
+            const hasAudio = inputData.some(
+              (sample) => Math.abs(sample) > 0.001
+            );
+
+            console.log(`🎤 [Microphone] Audio chunk ${chunkCount}:`, {
+              samples: inputData.length,
+              rms: rms.toFixed(4),
+              peak: peak.toFixed(4),
+              hasAudio,
+              sampleRate: e.inputBuffer.sampleRate,
+            });
+            chunkCount++;
+          }
+
           // Convert Float32Array to Int16Array for Deepgram
           const int16Data = this.floatTo16BitPCM(inputData);
           // Convert to Uint8Array for better IPC compatibility
-          const uint8Data = new Uint8Array(int16Data);
-          onAudioData(uint8Data.buffer, 'microphone');
+          const uint8Data = new Uint8Array(int16Data.buffer);
+          onAudioData(uint8Data.buffer, "microphone");
         }
       };
 
@@ -48,7 +108,7 @@ class AudioCapture {
 
       return { success: true };
     } catch (error) {
-      console.error('Microphone capture error:', error);
+      console.error("Microphone capture error:", error);
       return { success: false, error: error.message };
     }
   }
@@ -70,124 +130,130 @@ class AudioCapture {
             audio: true,
             video: true,
           });
-          
+
           // Stop video tracks immediately since we only need audio
           const videoTracks = stream.getVideoTracks();
           if (videoTracks.length > 0) {
-            videoTracks.forEach(track => track.stop());
+            videoTracks.forEach((track) => track.stop());
           }
-          
+
           // Verify we have an audio track
           const audioTracks = stream.getAudioTracks();
           if (audioTracks.length === 0) {
-            stream.getTracks().forEach(track => track.stop());
-            throw new Error('No audio track in the selected source. Please select a source with audio.');
+            stream.getTracks().forEach((track) => track.stop());
+            throw new Error(
+              "No audio track in the selected source. Please select a source with audio."
+            );
           }
         } catch (error) {
           // If getDisplayMedia fails, try desktopCapturer as fallback
-          console.log('getDisplayMedia failed, trying desktopCapturer:', error.message);
-          
+          console.log(
+            "getDisplayMedia failed, trying desktopCapturer:",
+            error.message
+          );
+
           if (window.electronAPI && window.electronAPI.getDesktopSources) {
             try {
-              const sourcesResult = await window.electronAPI.getDesktopSources();
+              const sourcesResult =
+                await window.electronAPI.getDesktopSources();
               if (sourcesResult.success && sourcesResult.sources.length > 0) {
                 const sourceId = sourcesResult.sources[0].id;
-                
+
                 // Use getUserMedia with desktop source
                 stream = await navigator.mediaDevices.getUserMedia({
                   audio: {
                     mandatory: {
-                      chromeMediaSource: 'desktop',
+                      chromeMediaSource: "desktop",
                       chromeMediaSourceId: sourceId,
                     },
                   },
                   video: {
                     mandatory: {
-                      chromeMediaSource: 'desktop',
+                      chromeMediaSource: "desktop",
                       chromeMediaSourceId: sourceId,
                     },
                   },
                 });
-                
+
                 // Stop video tracks
-                stream.getVideoTracks().forEach(track => track.stop());
+                stream.getVideoTracks().forEach((track) => track.stop());
               } else {
-                throw new Error('No desktop sources available');
+                throw new Error("No desktop sources available");
               }
             } catch (desktopError) {
-              console.log('DesktopCapturer also failed:', desktopError.message);
+              console.log("DesktopCapturer also failed:", desktopError.message);
               // Throw the original getDisplayMedia error with helpful message
               throw new Error(
                 `Unable to capture system audio: ${error.message}\n\n` +
-                'This may require:\n' +
-                '• Screen recording permission (macOS: System Preferences > Security & Privacy > Screen Recording)\n' +
-                '• Selecting an audio source in the sharing dialog\n' +
-                '• Or a native audio capture module for automatic capture\n\n' +
-                'For production use, integrate native modules:\n' +
-                '• macOS: ScreenCaptureKit (macOS 13+) or BlackHole\n' +
-                '• Windows: WASAPI Loopback\n\n' +
-                'See NATIVE_MODULE_NOTES.md for integration details.'
+                  "This may require:\n" +
+                  "• Screen recording permission (macOS: System Preferences > Security & Privacy > Screen Recording)\n" +
+                  "• Selecting an audio source in the sharing dialog\n" +
+                  "• Or a native audio capture module for automatic capture\n\n" +
+                  "For production use, integrate native modules:\n" +
+                  "• macOS: ScreenCaptureKit (macOS 13+) or BlackHole\n" +
+                  "• Windows: WASAPI Loopback\n\n" +
+                  "See NATIVE_MODULE_NOTES.md for integration details."
               );
             }
           } else {
             // Neither method available
             throw new Error(
               `System audio capture not available: ${error.message}\n\n` +
-              'getDisplayMedia is not supported. This may indicate:\n' +
-              '• Electron version issue\n' +
-              '• Missing permissions\n' +
-              '• Or use a native audio capture module\n\n' +
-              'See NATIVE_MODULE_NOTES.md for native module integration.'
+                "getDisplayMedia is not supported. This may indicate:\n" +
+                "• Electron version issue\n" +
+                "• Missing permissions\n" +
+                "• Or use a native audio capture module\n\n" +
+                "See NATIVE_MODULE_NOTES.md for native module integration."
             );
           }
         }
       } else {
         throw new Error(
-          'getDisplayMedia API not available in this Electron version.\n\n' +
-          'System audio capture requires:\n' +
-          '• Electron 5.0+ with getDisplayMedia support\n' +
-          '• Or a native audio capture module\n\n' +
-          'For production use, integrate native modules:\n' +
-          '• macOS: ScreenCaptureKit (macOS 13+) or BlackHole\n' +
-          '• Windows: WASAPI Loopback\n\n' +
-          'See NATIVE_MODULE_NOTES.md for integration details.'
+          "getDisplayMedia API not available in this Electron version.\n\n" +
+            "System audio capture requires:\n" +
+            "• Electron 5.0+ with getDisplayMedia support\n" +
+            "• Or a native audio capture module\n\n" +
+            "For production use, integrate native modules:\n" +
+            "• macOS: ScreenCaptureKit (macOS 13+) or BlackHole\n" +
+            "• Windows: WASAPI Loopback\n\n" +
+            "See NATIVE_MODULE_NOTES.md for integration details."
         );
       }
 
       if (!stream) {
-        throw new Error('Failed to obtain audio stream');
+        throw new Error("Failed to obtain audio stream");
       }
 
       // Check if audio track was actually selected and is enabled
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length === 0) {
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach((track) => track.stop());
         throw new Error(
-          '⚠️ No audio track selected!\n\n' +
-          'IMPORTANT: In the sharing dialog, you must:\n' +
-          '1. Select a screen or window\n' +
-          '2. ✅ CHECK THE "Share audio" or "Share system audio" checkbox\n' +
-          '3. Then click "Share" or "Allow"\n\n' +
-          'If you don\'t see an audio option, the selected source may not support audio sharing.\n\n' +
-          'Note: For production use, integrate native modules for automatic system audio capture.'
+          "⚠️ No audio track selected!\n\n" +
+            "IMPORTANT: In the sharing dialog, you must:\n" +
+            "1. Select a screen or window\n" +
+            '2. ✅ CHECK THE "Share audio" or "Share system audio" checkbox\n' +
+            '3. Then click "Share" or "Allow"\n\n' +
+            "If you don't see an audio option, the selected source may not support audio sharing.\n\n" +
+            "Note: For production use, integrate native modules for automatic system audio capture."
         );
       }
 
       // Validate audio track state
       const audioTrack = audioTracks[0];
-      if (!audioTrack.enabled || audioTrack.readyState !== 'live') {
+      if (!audioTrack.enabled || audioTrack.readyState !== "live") {
         const state = audioTrack.readyState;
         const enabled = audioTrack.enabled;
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach((track) => track.stop());
         throw new Error(
           `⚠️ Audio track is not active!\n\n` +
-          `Track state: ${state}\n` +
-          `Track enabled: ${enabled}\n\n` +
-          `Please try again and make sure to:\n` +
-          `1. Select a screen/window in the dialog\n` +
-          `2. ✅ CHECK "Share audio" or "Share system audio"\n` +
-          `3. Click "Share" or "Allow"\n\n` +
-          `If the problem persists, you may need to grant screen recording permissions.`
+            `Track state: ${state}\n` +
+            `Track enabled: ${enabled}\n\n` +
+            `Please try again and make sure to:\n` +
+            `1. Select a screen/window in the dialog\n` +
+            `2. ✅ CHECK "Share audio" or "Share system audio"\n` +
+            `3. Click "Share" or "Allow"\n\n` +
+            `If the problem persists, you may need to grant screen recording permissions.`
         );
       }
 
@@ -203,38 +269,49 @@ class AudioCapture {
           clearInterval(audioCheckInterval);
           return;
         }
-        
+
         const timeSinceLastAudio = Date.now() - lastAudioCheck;
         // If no audio samples received in 3 seconds, warn the user
         if (audioSamplesReceived === 0 && timeSinceLastAudio > 3000) {
-          console.warn('⚠️ No audio data detected. Make sure audio is playing and "Share audio" was enabled.');
+          console.warn(
+            '⚠️ No audio data detected. Make sure audio is playing and "Share audio" was enabled.'
+          );
           // Dispatch event to notify renderer
           if (window.dispatchEvent) {
-            window.dispatchEvent(new CustomEvent('audio-capture-warning', {
-              detail: { message: 'No audio detected. Make sure "Share audio" was enabled and audio is playing.' }
-            }));
+            window.dispatchEvent(
+              new CustomEvent("audio-capture-warning", {
+                detail: {
+                  message:
+                    'No audio detected. Make sure "Share audio" was enabled and audio is playing.',
+                },
+              })
+            );
           }
         }
         audioSamplesReceived = 0; // Reset counter
       }, 3000);
 
-      this.speakerProcessor = this.speakerContext.createScriptProcessor(4096, 1, 1);
-      
+      this.speakerProcessor = this.speakerContext.createScriptProcessor(
+        4096,
+        1,
+        1
+      );
+
       this.speakerProcessor.onaudioprocess = (e) => {
         if (this.isSpeakerCapturing) {
           const inputData = e.inputBuffer.getChannelData(0);
-          
+
           // Check if there's actual audio (not just silence)
-          const hasAudio = inputData.some(sample => Math.abs(sample) > 0.001);
+          const hasAudio = inputData.some((sample) => Math.abs(sample) > 0.001);
           if (hasAudio) {
             audioSamplesReceived++;
             lastAudioCheck = Date.now();
           }
-          
+
           const int16Data = this.floatTo16BitPCM(inputData);
           // Convert to Uint8Array for better IPC compatibility
           const uint8Data = new Uint8Array(int16Data);
-          onAudioData(uint8Data.buffer, 'speaker');
+          onAudioData(uint8Data.buffer, "speaker");
         }
       };
 
@@ -257,51 +334,61 @@ class AudioCapture {
       };
 
       // Listen to all tracks ending
-      audioTracks.forEach(track => {
+      audioTracks.forEach((track) => {
         track.onended = handleTrackEnd;
       });
-      
+
       // Also listen to video tracks if any (in case user selected screen)
-      stream.getVideoTracks().forEach(track => {
+      stream.getVideoTracks().forEach((track) => {
         track.onended = handleTrackEnd;
       });
 
       return { success: true };
     } catch (error) {
-      console.error('Speaker capture error:', error);
-      
+      console.error("Speaker capture error:", error);
+
       // Provide more helpful error messages
       let errorMessage = error.message;
-      
-      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-        errorMessage = 
-          'Permission denied. Please:\n' +
-          '1. Grant screen recording permission in System Preferences (macOS)\n' +
-          '2. Or allow screen sharing in the browser dialog\n' +
-          '3. For silent capture, use a native module (see NATIVE_MODULE_NOTES.md)';
-      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-        errorMessage = 
-          'Cannot access audio device. This may require:\n' +
-          '• Screen recording permission (macOS)\n' +
-          '• Or a native audio capture module for system audio';
-      } else if (error.name === 'NotFoundError') {
-        errorMessage = 
-          'No audio source found. Please ensure:\n' +
-          '• Audio is playing on your system\n' +
-          '• You select an audio source in the sharing dialog\n' +
-          '• Or use a native module for automatic capture';
-      } else if (error.name === 'NotSupportedError' || error.message.includes('not supported') || error.message.includes('Not supported')) {
-        errorMessage = 
-          'Screen sharing API not supported in this Electron version.\n\n' +
-          'This feature requires:\n' +
-          '• Electron 5.0+ with desktopCapturer enabled\n' +
-          '• Or a native audio capture module\n\n' +
-          'For production use, integrate native modules:\n' +
-          '• macOS: ScreenCaptureKit (macOS 13+) or BlackHole\n' +
-          '• Windows: WASAPI Loopback\n\n' +
-          'See NATIVE_MODULE_NOTES.md for integration details.';
+
+      if (
+        error.name === "NotAllowedError" ||
+        error.name === "PermissionDeniedError"
+      ) {
+        errorMessage =
+          "Permission denied. Please:\n" +
+          "1. Grant screen recording permission in System Preferences (macOS)\n" +
+          "2. Or allow screen sharing in the browser dialog\n" +
+          "3. For silent capture, use a native module (see NATIVE_MODULE_NOTES.md)";
+      } else if (
+        error.name === "NotReadableError" ||
+        error.name === "TrackStartError"
+      ) {
+        errorMessage =
+          "Cannot access audio device. This may require:\n" +
+          "• Screen recording permission (macOS)\n" +
+          "• Or a native audio capture module for system audio";
+      } else if (error.name === "NotFoundError") {
+        errorMessage =
+          "No audio source found. Please ensure:\n" +
+          "• Audio is playing on your system\n" +
+          "• You select an audio source in the sharing dialog\n" +
+          "• Or use a native module for automatic capture";
+      } else if (
+        error.name === "NotSupportedError" ||
+        error.message.includes("not supported") ||
+        error.message.includes("Not supported")
+      ) {
+        errorMessage =
+          "Screen sharing API not supported in this Electron version.\n\n" +
+          "This feature requires:\n" +
+          "• Electron 5.0+ with desktopCapturer enabled\n" +
+          "• Or a native audio capture module\n\n" +
+          "For production use, integrate native modules:\n" +
+          "• macOS: ScreenCaptureKit (macOS 13+) or BlackHole\n" +
+          "• Windows: WASAPI Loopback\n\n" +
+          "See NATIVE_MODULE_NOTES.md for integration details.";
       }
-      
+
       return { success: false, error: errorMessage };
     }
   }
@@ -309,7 +396,7 @@ class AudioCapture {
   // Stop microphone capture
   stopMicrophoneCapture() {
     this.isMicrophoneCapturing = false;
-    
+
     if (this.microphoneProcessor) {
       this.microphoneProcessor.disconnect();
       this.microphoneProcessor = null;
@@ -321,7 +408,7 @@ class AudioCapture {
     }
 
     if (this.microphoneStream) {
-      this.microphoneStream.getTracks().forEach(track => track.stop());
+      this.microphoneStream.getTracks().forEach((track) => track.stop());
       this.microphoneStream = null;
     }
 
@@ -331,13 +418,13 @@ class AudioCapture {
   // Stop speaker capture
   stopSpeakerCapture() {
     this.isSpeakerCapturing = false;
-    
+
     // Clear audio monitoring interval
     if (this.speakerAudioCheckInterval) {
       clearInterval(this.speakerAudioCheckInterval);
       this.speakerAudioCheckInterval = null;
     }
-    
+
     if (this.speakerProcessor) {
       this.speakerProcessor.disconnect();
       this.speakerProcessor = null;
@@ -349,7 +436,7 @@ class AudioCapture {
     }
 
     if (this.speakerStream) {
-      this.speakerStream.getTracks().forEach(track => track.stop());
+      this.speakerStream.getTracks().forEach((track) => track.stop());
       this.speakerStream = null;
     }
 
@@ -362,7 +449,7 @@ class AudioCapture {
     for (let i = 0; i < float32Array.length; i++) {
       // Clamp values to [-1, 1] range and convert to 16-bit integer
       const s = Math.max(-1, Math.min(1, float32Array[i]));
-      int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
     return int16Array;
   }
@@ -372,11 +459,11 @@ class AudioCapture {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       return {
-        inputs: devices.filter(device => device.kind === 'audioinput'),
-        outputs: devices.filter(device => device.kind === 'audiooutput'),
+        inputs: devices.filter((device) => device.kind === "audioinput"),
+        outputs: devices.filter((device) => device.kind === "audiooutput"),
       };
     } catch (error) {
-      console.error('Error getting audio devices:', error);
+      console.error("Error getting audio devices:", error);
       return { inputs: [], outputs: [] };
     }
   }
@@ -385,25 +472,35 @@ class AudioCapture {
   checkSystemAudioSupport() {
     const checks = {
       mediaDevices: !!navigator.mediaDevices,
-      getDisplayMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia),
-      getUserMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
-      electronAPI: !!(window.electronAPI && window.electronAPI.getDesktopSources),
+      getDisplayMedia: !!(
+        navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia
+      ),
+      getUserMedia: !!(
+        navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+      ),
+      electronAPI: !!(
+        window.electronAPI && window.electronAPI.getDesktopSources
+      ),
     };
 
-    let supportLevel = 'full';
-    let message = '';
+    let supportLevel = "full";
+    let message = "";
 
     if (!checks.mediaDevices) {
-      supportLevel = 'none';
-      message = 'MediaDevices API not available. This may indicate an insecure context or outdated Electron version.';
+      supportLevel = "none";
+      message =
+        "MediaDevices API not available. This may indicate an insecure context or outdated Electron version.";
     } else if (!checks.getDisplayMedia && !checks.electronAPI) {
-      supportLevel = 'none';
-      message = 'System audio capture not available. Requires Electron 5.0+ with getDisplayMedia or desktopCapturer API.';
+      supportLevel = "none";
+      message =
+        "System audio capture not available. Requires Electron 5.0+ with getDisplayMedia or desktopCapturer API.";
     } else if (!checks.getDisplayMedia && checks.electronAPI) {
-      supportLevel = 'partial';
-      message = 'getDisplayMedia not available, but desktopCapturer API is available. System audio capture should work.';
+      supportLevel = "partial";
+      message =
+        "getDisplayMedia not available, but desktopCapturer API is available. System audio capture should work.";
     } else {
-      message = 'System audio capture API is available (requires user permission).';
+      message =
+        "System audio capture API is available (requires user permission).";
     }
 
     return {
@@ -417,4 +514,3 @@ class AudioCapture {
 
 // Export for use in renderer
 window.AudioCapture = AudioCapture;
-
