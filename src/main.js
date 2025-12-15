@@ -124,13 +124,18 @@ async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
 
       // Send transcript to renderer for display (in series order)
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("transcript", {
+        const transcriptData = {
           text: transcript,
           isFinal: true,
           source: "speaker",
           fileIndex: fileIndex,
           timestamp: Date.now(),
-        });
+        };
+        console.log(`📤 Sending transcript to renderer:`, transcriptData);
+        mainWindow.webContents.send("transcript", transcriptData);
+        console.log(`✅ Transcript sent to renderer`);
+      } else {
+        console.log(`❌ Cannot send transcript: mainWindow not available`);
       }
     } else {
       console.log(

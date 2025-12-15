@@ -45,7 +45,10 @@ function setupEventListeners() {
 
   // Listen for transcript events (including file-based transcripts)
   window.electronAPI.onTranscript((data) => {
-    console.log("📨 Received transcript event from main process:", data);
+    console.log(
+      "📨 [RENDERER] Received transcript event from main process:",
+      data
+    );
     displayTranscript(data.text, data.isFinal, data.source, data);
   });
 
@@ -80,9 +83,7 @@ function setupEventListeners() {
     console.error("Speaker error:", error);
   });
 
-  window.electronAPI.onTranscript((data) => {
-    displayTranscript(data.text, data.isFinal, data.source, data);
-  });
+  // NOTE: onTranscript listener already registered above (line 47-50), removing duplicate
 
   // Listen for audio capture warnings
   window.addEventListener("audio-capture-warning", (event) => {
@@ -313,12 +314,12 @@ async function stopSpeaker() {
 
 // Store transcripts by file index for sequential display
 let speakerTranscripts = new Map();
-let lastDisplayedIndex = -1;
+let lastDisplayedText = ""; // Track last displayed text for capitalization
 
 // Reset transcript tracking when starting new capture
 function resetSpeakerTranscriptTracking() {
   speakerTranscripts.clear();
-  lastDisplayedIndex = -1;
+  lastDisplayedText = "";
 }
 
 // Function to lowercase first word if continuing from previous transcript
@@ -346,96 +347,100 @@ function adjustCapitalization(text, previousText) {
 
 // Function to display transcripts in sequential order
 function displaySequentialTranscripts() {
+  console.log(`🔍 [displaySequentialTranscripts] Starting...`);
   const contentDiv = document.getElementById("speakerTranscriptContent");
   if (!contentDiv) {
     console.error("❌ speakerTranscriptContent element not found!");
     return;
   }
+  console.log(`✅ Found speakerTranscriptContent element`);
 
-  // Keep displaying consecutive transcripts until we hit a gap
   let displayedAny = false;
-  let nextExpectedIndex = lastDisplayedIndex + 1;
 
-  console.log(
-    `🔄 displaySequentialTranscripts: nextExpectedIndex=${nextExpectedIndex}`
-  );
+  // Keep displaying transcripts while we have any available
+  while (speakerTranscripts.size > 0) {
+    // Get all available indices, sorted
+    const sortedIndices = Array.from(speakerTranscripts.keys()).sort(
+      (a, b) => a - b
+    );
 
-  while (true) {
-    // Check if we have the next expected index
-    if (speakerTranscripts.has(nextExpectedIndex)) {
-      const transcriptData = speakerTranscripts.get(nextExpectedIndex);
-      if (transcriptData) {
-        // Get the last displayed transcript text for capitalization adjustment
-        const lastDisplayedText =
-          lastDisplayedIndex >= 0
-            ? speakerTranscripts.get(lastDisplayedIndex)?.text || ""
-            : "";
+    // Always take the first (lowest) index
+    const currentIndex = sortedIndices[0];
+    const transcriptData = speakerTranscripts.get(currentIndex);
 
-        // Adjust capitalization based on previous transcript
-        const adjustedText = adjustCapitalization(
-          transcriptData.text,
-          lastDisplayedText
-        );
-
-        console.log(
-          `✅ Displaying transcript ${nextExpectedIndex}: "${adjustedText}"`
-        );
-        const finalDiv = document.createElement("span");
-        finalDiv.className = "final";
-        finalDiv.textContent = adjustedText + " ";
-        contentDiv.appendChild(finalDiv);
-
-        // Update stored transcript with adjusted text
-        speakerTranscript += adjustedText + " ";
-        lastDisplayedIndex = nextExpectedIndex;
-        nextExpectedIndex++;
-        displayedAny = true;
-
-        // Continue to check for next consecutive index
-      } else {
-        console.log(
-          `⚠️ Transcript ${nextExpectedIndex} exists but has no data`
-        );
-        break;
-      }
-    } else {
-      // We don't have the next expected index, stop
-      console.log(
-        `⏸️ Stopping at index ${nextExpectedIndex} (not available yet)`
-      );
-      break;
+    if (!transcriptData) {
+      console.log(`⚠️ Transcript ${currentIndex} exists but has no data`);
+      speakerTranscripts.delete(currentIndex);
+      continue;
     }
+
+    // Adjust capitalization based on previous transcript
+    const adjustedText = adjustCapitalization(
+      transcriptData.text,
+      lastDisplayedText
+    );
+
+    console.log(`✅ Displaying transcript ${currentIndex}: "${adjustedText}"`);
+
+    // Display the transcript
+    const finalDiv = document.createElement("span");
+    finalDiv.className = "final";
+    finalDiv.textContent = adjustedText + " ";
+    contentDiv.appendChild(finalDiv);
+
+    // Update stored transcript
+    speakerTranscript += adjustedText + " ";
+    lastDisplayedText = adjustedText;
+    displayedAny = true;
+
+    // Remove from map after displaying
+    speakerTranscripts.delete(currentIndex);
+    console.log(`🗑️ Removed transcript ${currentIndex} from queue`);
   }
 
   // Scroll to bottom if we displayed anything
   if (displayedAny) {
     contentDiv.scrollTop = contentDiv.scrollHeight;
-    console.log(`📜 Updated lastDisplayedIndex to ${lastDisplayedIndex}`);
+    console.log(`📜 Displayed all available transcripts`);
   } else {
-    console.log(`ℹ️ No new transcripts displayed`);
+    console.log(`ℹ️ No new transcripts to display`);
   }
 }
 
 function displayTranscript(text, isFinal, source, eventData = null) {
+  console.log(`🎯 [displayTranscript] Called with:`, {
+    text,
+    isFinal,
+    source,
+    eventData,
+  });
+
   // Handle file-based transcripts (from MP3 transcription)
   if (source === "speaker" && eventData && eventData.fileIndex !== undefined) {
     const fileIndex = eventData.fileIndex;
-    console.log(`📝 Received transcript ${fileIndex}: "${text}"`);
+    console.log(`📝 Received file-based transcript ${fileIndex}: "${text}"`);
     speakerTranscripts.set(fileIndex, {
       text: text,
       timestamp: eventData.timestamp || Date.now(),
     });
 
     console.log(
-      `📊 Stored transcripts:`,
+      `📊 Stored transcripts (queue):`,
       Array.from(speakerTranscripts.keys()).sort((a, b) => a - b)
     );
-    console.log(`📊 Last displayed index: ${lastDisplayedIndex}`);
 
     // Display transcripts in sequential order
     displaySequentialTranscripts();
     return;
   }
+
+  // Handle live/streaming transcripts (no fileIndex)
+  console.log(
+    `📝 Received live ${source} transcript (${
+      isFinal ? "FINAL" : "interim"
+    }): "${text}"`
+  );
+
   const contentId =
     source === "microphone"
       ? "micTranscriptContent"
