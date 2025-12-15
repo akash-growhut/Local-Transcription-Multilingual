@@ -19,9 +19,12 @@ function initializeUI() {
   updateStatus("micStatus", "Not connected", "");
   updateStatus("speakerStatus", "Not connected", "");
 
-  // Clear transcripts
-  document.getElementById("micTranscriptContent").textContent = "";
-  document.getElementById("speakerTranscriptContent").textContent = "";
+  // Clear chat messages
+  const chatMessages = document.getElementById("chatMessages");
+  if (chatMessages) {
+    chatMessages.innerHTML =
+      '<div class="empty-state">Start recording to see transcriptions appear here...</div>';
+  }
 }
 
 function setupEventListeners() {
@@ -31,17 +34,9 @@ function setupEventListeners() {
     if (e.key === "Enter") saveApiKey();
   });
 
-  // Microphone controls
-  document
-    .getElementById("startMic")
-    .addEventListener("click", startMicrophone);
-  document.getElementById("stopMic").addEventListener("click", stopMicrophone);
-
-  // Speaker controls
-  document
-    .getElementById("startSpeaker")
-    .addEventListener("click", startSpeaker);
-  document.getElementById("stopSpeaker").addEventListener("click", stopSpeaker);
+  // Unified controls - Start both mic and speaker
+  document.getElementById("startAll").addEventListener("click", startAll);
+  document.getElementById("stopAll").addEventListener("click", stopAll);
 
   // Listen for transcript events (including file-based transcripts)
   window.electronAPI.onTranscript((data) => {
@@ -56,21 +51,17 @@ function setupEventListeners() {
   window.electronAPI.onMicrophoneConnected((connected) => {
     updateStatus(
       "micStatus",
-      connected ? "Connected" : "Disconnected",
-      connected ? "connected" : ""
+      connected ? "Recording" : "Ready",
+      connected ? "recording" : ""
     );
-    document.getElementById("startMic").disabled = connected;
-    document.getElementById("stopMic").disabled = !connected;
   });
 
   window.electronAPI.onSpeakerConnected((connected) => {
     updateStatus(
       "speakerStatus",
-      connected ? "Connected" : "Disconnected",
-      connected ? "connected" : ""
+      connected ? "Recording" : "Ready",
+      connected ? "recording" : ""
     );
-    document.getElementById("startSpeaker").disabled = connected;
-    document.getElementById("stopSpeaker").disabled = !connected;
   });
 
   window.electronAPI.onMicrophoneError((error) => {
@@ -151,144 +142,127 @@ function loadSavedApiKey() {
   }
 }
 
-async function startMicrophone() {
+// Unified start function - starts both microphone and speaker
+async function startAll() {
   if (!deepgramApiKey) {
     alert("Please enter and save your Deepgram API key first");
     return;
   }
 
-  try {
-    // Start Deepgram connection
-    const result = await window.electronAPI.startMicrophoneCapture(
-      deepgramApiKey
-    );
-    if (!result.success) {
-      alert(`Error starting microphone capture: ${result.error}`);
-      return;
-    }
-
-    // Start audio capture
-    const audioResult = await audioCapture.startMicrophoneCapture(
-      (audioData, source, sampleRate) => {
-        // Send audio data to Deepgram via main process with sample rate
-        window.electronAPI.sendAudioData(audioData, source, sampleRate);
-      }
-    );
-
-    if (audioResult.success) {
-      updateStatus("micStatus", "Recording...", "recording");
-      document.getElementById("startMic").disabled = true;
-      document.getElementById("stopMic").disabled = false;
-    } else {
-      alert(`Error starting microphone: ${audioResult.error}`);
-      await window.electronAPI.stopMicrophoneCapture();
-    }
-  } catch (error) {
-    console.error("Error starting microphone:", error);
-    alert(`Error: ${error.message}`);
-  }
-}
-
-async function stopMicrophone() {
-  audioCapture.stopMicrophoneCapture();
-  const result = await window.electronAPI.stopMicrophoneCapture();
-
-  if (result.success) {
-    updateStatus("micStatus", "Stopped", "");
-    document.getElementById("startMic").disabled = false;
-    document.getElementById("stopMic").disabled = true;
-  }
-}
-
-async function startSpeaker() {
   // Reset transcript tracking for new session
   resetSpeakerTranscriptTracking();
-  if (!deepgramApiKey) {
-    showError("Please enter and save your Deepgram API key first");
-    return;
-  }
 
-  // Show info about system audio capture requirements
-  const platform = navigator.platform.toLowerCase();
-  let platformNote = "";
-
-  if (platform.includes("mac")) {
-    platformNote =
-      "\n\n📱 macOS: You may need to grant Screen Recording permission in System Preferences > Security & Privacy.";
-  } else if (platform.includes("win")) {
-    platformNote =
-      "\n\n🪟 Windows: For automatic capture, a native WASAPI Loopback module is recommended.";
-  }
+  // Clear chat messages
+  const chatMessages = document.getElementById("chatMessages");
+  if (chatMessages) chatMessages.innerHTML = "";
 
   try {
-    // Start Deepgram connection
-    const result = await window.electronAPI.startSpeakerCapture(deepgramApiKey);
-    if (!result.success) {
-      showError(
-        `Error starting speaker capture: ${result.error}${platformNote}`
-      );
-      return;
-    }
+    // Disable start button, enable stop button
+    document.getElementById("startAll").disabled = true;
+    document.getElementById("stopAll").disabled = false;
 
-    // Start audio capture
-    const audioResult = await audioCapture.startSpeakerCapture(
-      (audioData, source) => {
-        // Send audio data to Deepgram via main process
-        window.electronAPI.sendAudioData(audioData, source);
-      }
+    // Hide help text when recording
+    const helpText = document.getElementById("speakerHelp");
+    if (helpText) helpText.style.display = "none";
+
+    // Start microphone
+    updateStatus("micStatus", "Starting...", "recording");
+    const micResult = await window.electronAPI.startMicrophoneCapture(
+      deepgramApiKey
     );
-
-    if (audioResult.success) {
-      updateStatus("speakerStatus", "Recording...", "recording");
-      document.getElementById("startSpeaker").disabled = true;
-      document.getElementById("stopSpeaker").disabled = false;
-      // Hide help text when recording
-      const helpText = document.getElementById("speakerHelp");
-      if (helpText) helpText.style.display = "none";
-
-      // Show reminder about audio sharing
-      setTimeout(() => {
-        const statusEl = document.getElementById("speakerStatus");
-        if (statusEl && statusEl.classList.contains("recording")) {
-          // Check if we're getting transcripts (indicates audio is working)
-          // If no transcripts after 5 seconds, show reminder
-          setTimeout(() => {
-            const transcriptContent = document.getElementById(
-              "speakerTranscriptContent"
-            );
-            const hasTranscripts =
-              transcriptContent &&
-              transcriptContent.querySelectorAll(".final, .interim").length > 0;
-
-            if (!hasTranscripts) {
-              showError(
-                "⚠️ No audio detected yet!\n\n" +
-                  "If you don't see transcripts, make sure:\n" +
-                  '1. ✅ "Share audio" was checked in the sharing dialog\n' +
-                  "2. Audio is actually playing on your system\n" +
-                  "3. Screen recording permission is granted (macOS)\n\n" +
-                  "Try stopping and starting again, making sure to enable audio sharing."
-              );
-            }
-          }, 5000);
-        }
-      }, 2000);
+    if (!micResult.success) {
+      console.error(`Error starting microphone: ${micResult.error}`);
+      updateStatus("micStatus", "Error", "error");
     } else {
-      // Show detailed error with platform-specific guidance
-      showError(
-        `Error starting speaker capture:\n\n${audioResult.error}${platformNote}\n\n` +
-          `💡 Tip: In the browser dialog, make sure to select an audio source. ` +
-          `For production use, integrate native modules for silent system audio capture.`
+      const audioResult = await audioCapture.startMicrophoneCapture(
+        (audioData, source, sampleRate) => {
+          window.electronAPI.sendAudioData(audioData, source, sampleRate);
+        }
       );
-      await window.electronAPI.stopSpeakerCapture();
+      if (audioResult.success) {
+        updateStatus("micStatus", "Recording", "recording");
+      } else {
+        console.error(`Error starting microphone audio: ${audioResult.error}`);
+        updateStatus("micStatus", "Error", "error");
+      }
     }
-  } catch (error) {
-    console.error("Error starting speaker:", error);
-    showError(
-      `Error: ${error.message}${platformNote}\n\n` +
-        `System audio capture requires screen sharing permissions or a native module. ` +
-        `See NATIVE_MODULE_NOTES.md for integration details.`
+
+    // Start speaker
+    updateStatus("speakerStatus", "Starting...", "recording");
+    const speakerResult = await window.electronAPI.startSpeakerCapture(
+      deepgramApiKey
     );
+    if (!speakerResult.success) {
+      console.error(`Error starting speaker: ${speakerResult.error}`);
+      updateStatus("speakerStatus", "Error", "error");
+    } else {
+      const audioResult = await audioCapture.startSpeakerCapture(
+        (audioData, source) => {
+          window.electronAPI.sendAudioData(audioData, source);
+        }
+      );
+      if (audioResult.success) {
+        updateStatus("speakerStatus", "Recording", "recording");
+      } else {
+        // Show error message but don't stop everything
+        showError(
+          `Speaker capture may not work:\n\n${audioResult.error}\n\n` +
+            `Make sure to:\n` +
+            `1. Grant screen recording permission (macOS)\n` +
+            `2. Select an audio source in the sharing dialog\n` +
+            `3. Check "Share audio" or "Share system audio"\n\n` +
+            `Microphone will continue working.`
+        );
+        updateStatus("speakerStatus", "Error", "error");
+      }
+    }
+
+    // Check for audio after 5 seconds
+    setTimeout(() => {
+      const chatMessages = document.getElementById("chatMessages");
+      const hasTranscripts =
+        chatMessages &&
+        chatMessages.querySelectorAll(".speaker-message").length > 0;
+
+      if (
+        !hasTranscripts &&
+        document.getElementById("speakerStatus").classList.contains("recording")
+      ) {
+        console.warn("⚠️ No speaker audio detected after 5 seconds");
+      }
+    }, 5000);
+  } catch (error) {
+    console.error("Error starting recording:", error);
+    showError(`Error: ${error.message}`);
+    // Re-enable start button if there was an error
+    document.getElementById("startAll").disabled = false;
+    document.getElementById("stopAll").disabled = true;
+  }
+}
+
+// Unified stop function - stops both microphone and speaker
+async function stopAll() {
+  try {
+    // Stop microphone
+    audioCapture.stopMicrophoneCapture();
+    await window.electronAPI.stopMicrophoneCapture();
+    updateStatus("micStatus", "Ready", "");
+
+    // Stop speaker
+    audioCapture.stopSpeakerCapture();
+    await window.electronAPI.stopSpeakerCapture();
+    updateStatus("speakerStatus", "Ready", "");
+
+    // Update buttons
+    document.getElementById("startAll").disabled = false;
+    document.getElementById("stopAll").disabled = true;
+
+    // Show help text again
+    const helpText = document.getElementById("speakerHelp");
+    if (helpText) helpText.style.display = "block";
+  } catch (error) {
+    console.error("Error stopping recording:", error);
+    showError(`Error stopping: ${error.message}`);
   }
 }
 
@@ -296,20 +270,6 @@ function showError(message) {
   // Use a more user-friendly error display
   alert(message);
   // Could be replaced with a custom modal for better UX
-}
-
-async function stopSpeaker() {
-  audioCapture.stopSpeakerCapture();
-  const result = await window.electronAPI.stopSpeakerCapture();
-
-  if (result.success) {
-    updateStatus("speakerStatus", "Stopped", "");
-    document.getElementById("startSpeaker").disabled = false;
-    document.getElementById("stopSpeaker").disabled = true;
-    // Show help text again
-    const helpText = document.getElementById("speakerHelp");
-    if (helpText) helpText.style.display = "block";
-  }
 }
 
 // Store transcripts by file index for sequential display
@@ -348,12 +308,12 @@ function adjustCapitalization(text, previousText) {
 // Function to display transcripts in sequential order
 function displaySequentialTranscripts() {
   console.log(`🔍 [displaySequentialTranscripts] Starting...`);
-  const contentDiv = document.getElementById("speakerTranscriptContent");
-  if (!contentDiv) {
-    console.error("❌ speakerTranscriptContent element not found!");
+  const chatMessages = document.getElementById("chatMessages");
+  if (!chatMessages) {
+    console.error("❌ chatMessages element not found!");
     return;
   }
-  console.log(`✅ Found speakerTranscriptContent element`);
+  console.log(`✅ Found chatMessages element`);
 
   let displayedAny = false;
 
@@ -382,11 +342,22 @@ function displaySequentialTranscripts() {
 
     console.log(`✅ Displaying transcript ${currentIndex}: "${adjustedText}"`);
 
-    // Display the transcript
-    const finalDiv = document.createElement("span");
-    finalDiv.className = "final";
-    finalDiv.textContent = adjustedText + " ";
-    contentDiv.appendChild(finalDiv);
+    // Remove empty state if exists
+    const emptyState = chatMessages.querySelector(".empty-state");
+    if (emptyState) {
+      emptyState.remove();
+    }
+
+    // Display the transcript as a message bubble (speaker message on the right)
+    const messageDiv = document.createElement("div");
+    messageDiv.className = "message speaker-message";
+
+    const textSpan = document.createElement("span");
+    textSpan.className = "final";
+    textSpan.textContent = adjustedText;
+
+    messageDiv.appendChild(textSpan);
+    chatMessages.appendChild(messageDiv);
 
     // Update stored transcript
     speakerTranscript += adjustedText + " ";
@@ -400,7 +371,7 @@ function displaySequentialTranscripts() {
 
   // Scroll to bottom if we displayed anything
   if (displayedAny) {
-    contentDiv.scrollTop = contentDiv.scrollHeight;
+    chatMessages.scrollTop = chatMessages.scrollHeight;
     console.log(`📜 Displayed all available transcripts`);
   } else {
     console.log(`ℹ️ No new transcripts to display`);
@@ -441,21 +412,34 @@ function displayTranscript(text, isFinal, source, eventData = null) {
     }): "${text}"`
   );
 
-  const contentId =
-    source === "microphone"
-      ? "micTranscriptContent"
-      : "speakerTranscriptContent";
-  const contentDiv = document.getElementById(contentId);
+  const chatMessages = document.getElementById("chatMessages");
+  if (!chatMessages) {
+    console.error("Chat messages container not found!");
+    return;
+  }
+
+  // Remove empty state if exists
+  const emptyState = chatMessages.querySelector(".empty-state");
+  if (emptyState) {
+    emptyState.remove();
+  }
 
   if (isFinal) {
-    // Add final transcript
-    const finalDiv = document.createElement("span");
-    finalDiv.className = "final";
-    finalDiv.textContent = text + " ";
-    contentDiv.appendChild(finalDiv);
+    // Add final transcript as a message bubble
+    const messageDiv = document.createElement("div");
+    messageDiv.className = `message ${
+      source === "microphone" ? "user-message" : "speaker-message"
+    }`;
+
+    const textSpan = document.createElement("span");
+    textSpan.className = "final";
+    textSpan.textContent = text;
+
+    messageDiv.appendChild(textSpan);
+    chatMessages.appendChild(messageDiv);
 
     // Scroll to bottom
-    contentDiv.scrollTop = contentDiv.scrollHeight;
+    chatMessages.scrollTop = chatMessages.scrollHeight;
 
     // Update stored transcript
     if (source === "microphone") {
@@ -464,18 +448,23 @@ function displayTranscript(text, isFinal, source, eventData = null) {
       speakerTranscript += text + " ";
     }
   } else {
-    // Update interim transcript (remove previous interim, add new one)
-    const existingInterim = contentDiv.querySelector(".interim");
+    // Update interim transcript (remove previous interim for this source, add new one)
+    const existingInterim = chatMessages.querySelector(
+      `.interim[data-source="${source}"]`
+    );
     if (existingInterim) {
       existingInterim.remove();
     }
 
     if (text) {
       const interimDiv = document.createElement("div");
-      interimDiv.className = "interim";
+      interimDiv.className = `message interim ${
+        source === "microphone" ? "user-message" : "speaker-message"
+      }`;
+      interimDiv.setAttribute("data-source", source);
       interimDiv.textContent = text;
-      contentDiv.appendChild(interimDiv);
-      contentDiv.scrollTop = contentDiv.scrollHeight;
+      chatMessages.appendChild(interimDiv);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
     }
   }
 }
@@ -517,17 +506,15 @@ function updatePlatformInfo() {
 
   // Update connection status
   const updateConnectionStatus = () => {
-    const micConnected =
-      document.getElementById("micStatus").classList.contains("connected") ||
-      document.getElementById("micStatus").classList.contains("recording");
-    const speakerConnected =
-      document
-        .getElementById("speakerStatus")
-        .classList.contains("connected") ||
-      document.getElementById("speakerStatus").classList.contains("recording");
+    const micRecording = document
+      .getElementById("micStatus")
+      .classList.contains("recording");
+    const speakerRecording = document
+      .getElementById("speakerStatus")
+      .classList.contains("recording");
 
-    if (micConnected || speakerConnected) {
-      document.getElementById("connectionStatus").textContent = "Active";
+    if (micRecording || speakerRecording) {
+      document.getElementById("connectionStatus").textContent = "Recording";
       document.getElementById("connectionStatus").classList.add("active");
     } else {
       document.getElementById("connectionStatus").textContent = "Ready";

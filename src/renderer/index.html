@@ -7,12 +7,14 @@
   <title>Surge Audio Capture</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
-  
+
   <div class="app-container">
     <header>
       <div class="logo-section">
@@ -31,82 +33,104 @@
           <div class="input-wrapper">
             <input type="password" id="apiKey" value="0107cf2f62345e007fbaf64e27bd7f4923c6a735" placeholder="sk-...">
             <button id="saveKey" class="btn-icon" title="Save Key">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
             </button>
           </div>
         </div>
       </div>
 
-      <div class="controls-grid">
-        <!-- Microphone Section -->
-        <div class="audio-source">
-          <div class="panel-header">
-            <h2>
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
-              Microphone
-            </h2>
-            <div id="micStatus" class="status-badge">Ready</div>
+      <!-- Unified Controls -->
+      <div class="unified-controls">
+        <div class="control-header">
+          <div class="status-indicators">
+            <div class="status-item">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="23"></line>
+                <line x1="8" y1="23" x2="16" y2="23"></line>
+              </svg>
+              <span>Microphone</span>
+              <div id="micStatus" class="status-badge">Ready</div>
+            </div>
+            <div class="status-item">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              </svg>
+              <span>Speaker</span>
+              <div id="speakerStatus" class="status-badge">Ready</div>
+            </div>
           </div>
-          
-          <div class="button-group">
-            <button id="startMic" class="btn btn-primary">
+          <div class="control-buttons">
+            <button id="startAll" class="btn btn-primary btn-large">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              </svg>
               Start Recording
             </button>
-            <button id="stopMic" class="btn btn-danger" disabled>
-              Stop
+            <button id="stopAll" class="btn btn-danger btn-large" disabled>
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              </svg>
+              Stop Recording
             </button>
           </div>
+        </div>
+        <div class="help-text" id="speakerHelp">
+          Requires screen sharing permission to capture system audio.
+        </div>
+      </div>
 
-          <div class="transcript-box">
-            <div class="transcript-header">
-              <span>Live Transcript</span>
-              <span>Input 1</span>
+      <!-- Chat-like Transcript Layout -->
+      <div class="chat-container">
+        <div class="chat-header">
+          <div class="chat-legend">
+            <div class="legend-item">
+              <div class="legend-bubble user-bubble-legend"></div>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="23"></line>
+                <line x1="8" y1="23" x2="16" y2="23"></line>
+              </svg>
+              <span>My Audio</span>
             </div>
-            <div id="micTranscriptContent" class="transcript-content">
-              <!-- Content injected via JS -->
+            <div class="legend-item">
+              <div class="legend-bubble speaker-bubble-legend"></div>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              </svg>
+              <span>Speaker Audio</span>
             </div>
           </div>
         </div>
-
-        <!-- Speaker Section -->
-        <div class="audio-source">
-          <div class="panel-header">
-            <h2>
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
-              System Audio
-            </h2>
-            <div id="speakerStatus" class="status-badge">Ready</div>
-          </div>
-
-          <div class="help-text" id="speakerHelp">
-            Requires screen sharing permission to capture system audio.
-          </div>
-          
-          <div class="button-group">
-            <button id="startSpeaker" class="btn btn-primary">
-              Start Capture
-            </button>
-            <button id="stopSpeaker" class="btn btn-danger" disabled>
-              Stop
-            </button>
-          </div>
-
-          <div class="transcript-box">
-            <div class="transcript-header">
-              <span>System Transcript</span>
-              <span>Output</span>
-            </div>
-            <div id="speakerTranscriptContent" class="transcript-content">
-              <!-- Content injected via JS -->
-            </div>
-          </div>
+        <div id="chatMessages" class="chat-messages">
+          <div class="empty-state">Start recording to see transcriptions appear here...</div>
         </div>
       </div>
 
       <div class="info-grid">
         <div class="info-box">
           <h3>
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
             System Info
           </h3>
           <ul class="info-list">
