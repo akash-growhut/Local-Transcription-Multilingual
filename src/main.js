@@ -46,7 +46,7 @@ let microphoneAudioStartTime = null;
 // At 16kHz: 4096 samples = 256ms per chunk
 // For ~1.5 seconds: 1500ms / 256ms = ~6 chunks
 // We'll adjust dynamically based on actual sample rate
-const MICROPHONE_CHUNKS_PER_FILE = 75; // Will be recalculated based on actual sample rate
+const MICROPHONE_CHUNKS_PER_FILE = 20; // Will be recalculated based on actual sample rate
 
 // Function to transcribe audio file with Deepgram using raw PCM data (SPEAKER)
 async function transcribeMP3File(mp3FilePath, fileIndex, rawFilePath) {
@@ -766,18 +766,12 @@ ipcMain.handle("start-microphone-capture", async (event, apiKey) => {
       `💾 [Microphone] Will save audio as MP3 files with unique names`
     );
 
-    // Create connection with default sample rate (will be updated when first audio arrives)
-    microphoneConnection = createMicrophoneConnection(
-      apiKey,
-      (transcript, isFinal, source) => {
-        mainWindow.webContents.send("transcript", {
-          text: transcript,
-          isFinal,
-          source,
-        });
-      },
-      microphoneSampleRate
-    );
+    // We're using file-based transcription, not live streaming
+    // Just notify UI that we're connected and ready
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("microphone-connected", true);
+    }
+
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
@@ -926,12 +920,18 @@ ipcMain.handle("stop-microphone-capture", async () => {
     );
   }
 
+  // Notify UI that we're disconnected
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("microphone-connected", false);
+  }
+
+  // Close live connection if it exists (though we're not using it)
   if (microphoneConnection) {
     microphoneConnection.finish();
     microphoneConnection = null;
-    return { success: true };
   }
-  return { success: false, error: "No active microphone connection" };
+
+  return { success: true };
 });
 
 ipcMain.handle("stop-speaker-capture", async () => {
@@ -964,130 +964,105 @@ ipcMain.handle(
   "send-audio-data",
   async (event, audioData, source, sampleRate) => {
     try {
-      const connection =
-        source === "microphone" ? microphoneConnection : speakerConnection;
-      if (connection) {
-        // Convert ArrayBuffer to Buffer for Node.js
-        const buffer = Buffer.from(audioData);
+      // Convert ArrayBuffer to Buffer for Node.js
+      const buffer = Buffer.from(audioData);
 
-        // Update sample rate if provided (for microphone)
-        if (
-          source === "microphone" &&
-          sampleRate &&
-          sampleRate !== microphoneSampleRate
-        ) {
+      // Handle speaker audio (uses live connection)
+      if (source === "speaker") {
+        if (speakerConnection) {
+          speakerConnection.send(buffer);
+        }
+        return { success: true };
+      }
+
+      // Handle microphone audio (uses file-based transcription)
+      if (source === "microphone") {
+        // Update sample rate if provided
+        if (sampleRate && sampleRate !== microphoneSampleRate) {
           console.log(`📊 [Microphone] Sample rate detected: ${sampleRate} Hz`);
           microphoneSampleRate = sampleRate;
+        }
 
-          // Recreate connection with correct sample rate
-          const apiKey = deepgramClient?.key;
-          if (apiKey && microphoneConnection) {
+        // Save microphone audio chunks to file
+        microphoneAudioChunks.push(buffer);
+        microphoneAudioChunkCount++;
+
+        // Log first few chunks for debugging with audio quality info
+        if (microphoneAudioChunkCount <= 3) {
+          // Analyze audio quality
+          const int16View = new Int16Array(
+            buffer.buffer,
+            buffer.byteOffset,
+            buffer.length / 2
+          );
+          let sum = 0;
+          let peak = 0;
+          let nonZeroCount = 0;
+
+          for (let i = 0; i < int16View.length; i++) {
+            const abs = Math.abs(int16View[i]);
+            sum += abs;
+            if (abs > peak) peak = abs;
+            if (abs > 0) nonZeroCount++;
+          }
+
+          const avg = sum / int16View.length;
+          const rms = Math.sqrt(
+            int16View.reduce((s, v) => s + v * v, 0) / int16View.length
+          );
+
+          console.log(`📊 [Microphone] Chunk ${microphoneAudioChunkCount}:`, {
+            bytes: buffer.length,
+            samples: int16View.length,
+            sampleRate: sampleRate || microphoneSampleRate,
+            avg: avg.toFixed(2),
+            rms: rms.toFixed(2),
+            peak: peak,
+            nonZero: nonZeroCount,
+            percentNonZero:
+              ((nonZeroCount / int16View.length) * 100).toFixed(2) + "%",
+          });
+
+          // Warn if audio level is too low
+          if (peak < 1000) {
+            console.warn(
+              `⚠️ [Microphone] WARNING: Audio level is very low (peak: ${peak})!`
+            );
+            console.warn(
+              `   For clear transcription, peak should be 5000-15000.`
+            );
+            console.warn(
+              `   Please check: 1) Correct microphone selected, 2) Microphone volume in System Preferences`
+            );
+
+            // Send warning to renderer
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(
+                "microphone-error",
+                `⚠️ Microphone level too low (peak: ${peak}). Please increase microphone volume in System Preferences > Sound > Input.`
+              );
+            }
+          } else if (peak >= 1000 && peak < 5000) {
             console.log(
-              `🔄 [Microphone] Recreating connection with ${sampleRate}Hz...`
+              `📢 [Microphone] Audio level is low but usable (peak: ${peak}). For best results, increase microphone volume.`
             );
-            microphoneConnection.finish();
-            microphoneConnection = createMicrophoneConnection(
-              apiKey,
-              (transcript, isFinal, src) => {
-                mainWindow.webContents.send("transcript", {
-                  text: transcript,
-                  isFinal,
-                  source: src,
-                });
-              },
-              sampleRate
-            );
-
-            // Wait a bit for new connection to open
-            await new Promise((resolve) => setTimeout(resolve, 500));
+          } else {
+            console.log(`✅ [Microphone] Audio level is good (peak: ${peak})`);
           }
         }
 
-        connection.send(buffer);
-
-        // Save microphone audio chunks to file
-        if (source === "microphone") {
-          microphoneAudioChunks.push(buffer);
-          microphoneAudioChunkCount++;
-
-          // Log first few chunks for debugging with audio quality info
-          if (microphoneAudioChunkCount <= 3) {
-            // Analyze audio quality
-            const int16View = new Int16Array(
-              buffer.buffer,
-              buffer.byteOffset,
-              buffer.length / 2
-            );
-            let sum = 0;
-            let peak = 0;
-            let nonZeroCount = 0;
-
-            for (let i = 0; i < int16View.length; i++) {
-              const abs = Math.abs(int16View[i]);
-              sum += abs;
-              if (abs > peak) peak = abs;
-              if (abs > 0) nonZeroCount++;
-            }
-
-            const avg = sum / int16View.length;
-            const rms = Math.sqrt(
-              int16View.reduce((s, v) => s + v * v, 0) / int16View.length
-            );
-
-            console.log(`📊 [Microphone] Chunk ${microphoneAudioChunkCount}:`, {
-              bytes: buffer.length,
-              samples: int16View.length,
-              sampleRate: sampleRate || microphoneSampleRate,
-              avg: avg.toFixed(2),
-              rms: rms.toFixed(2),
-              peak: peak,
-              nonZero: nonZeroCount,
-              percentNonZero:
-                ((nonZeroCount / int16View.length) * 100).toFixed(2) + "%",
-            });
-
-            // Warn if audio level is too low
-            if (peak < 1000) {
-              console.warn(
-                `⚠️ [Microphone] WARNING: Audio level is very low (peak: ${peak})!`
-              );
-              console.warn(
-                `   For clear transcription, peak should be 5000-15000.`
-              );
-              console.warn(
-                `   Please check: 1) Correct microphone selected, 2) Microphone volume in System Preferences`
-              );
-
-              // Send warning to renderer
-              if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send(
-                  "microphone-error",
-                  `⚠️ Microphone level too low (peak: ${peak}). Please increase microphone volume in System Preferences > Sound > Input.`
-                );
-              }
-            } else if (peak >= 1000 && peak < 5000) {
-              console.log(
-                `📢 [Microphone] Audio level is low but usable (peak: ${peak}). For best results, increase microphone volume.`
-              );
-            } else {
-              console.log(
-                `✅ [Microphone] Audio level is good (peak: ${peak})`
-              );
-            }
-          }
-
-          // Save as MP3 file every N chunks
-          if (microphoneAudioChunkCount % MICROPHONE_CHUNKS_PER_FILE === 0) {
-            console.log(
-              `📦 [Microphone] Reached ${microphoneAudioChunkCount} chunks, saving to file...`
-            );
-            saveMicrophoneAudioChunksAsMP3();
-          }
+        // Save as MP3 file every N chunks
+        if (microphoneAudioChunkCount % MICROPHONE_CHUNKS_PER_FILE === 0) {
+          console.log(
+            `📦 [Microphone] Reached ${microphoneAudioChunkCount} chunks, saving to file...`
+          );
+          saveMicrophoneAudioChunksAsMP3();
         }
 
         return { success: true };
       }
-      return { success: false, error: "Connection not ready" };
+
+      return { success: false, error: "Unknown source" };
     } catch (error) {
       return { success: false, error: error.message };
     }
