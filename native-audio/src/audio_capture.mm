@@ -48,8 +48,6 @@ typedef void (^AudioCallback)(const float* data, size_t length);
         }
     }
     
-    // Get audio buffer list
-    AudioBufferList audioBufferList;
     CMBlockBufferRef blockBuffer = NULL;
     size_t bufferListSize = 0;
     
