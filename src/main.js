@@ -245,6 +245,65 @@ async function transcribeMicrophoneMP3File(
 
     console.log(`📊 [Microphone] MP3 file size: ${mp3Buffer.length} bytes`);
 
+    // Check if MP3 file has actual data before sending to Deepgram
+    if (mp3Buffer.length === 0) {
+      console.log(
+        `⏭️ [Microphone] Skipping transcription: ${path.basename(
+          mp3FilePath
+        )} is empty (0 bytes)`
+      );
+      return;
+    }
+
+    // If raw file exists, validate it has non-zero audio data
+    if (rawFilePath && fs.existsSync(rawFilePath)) {
+      const rawBuffer = fs.readFileSync(rawFilePath);
+
+      if (rawBuffer.length === 0) {
+        console.log(
+          `⏭️ [Microphone] Skipping transcription: ${path.basename(
+            rawFilePath
+          )} is empty (0 bytes)`
+        );
+        return;
+      }
+
+      // Check if audio has non-zero samples
+      const int16Array = new Int16Array(
+        rawBuffer.buffer,
+        rawBuffer.byteOffset,
+        rawBuffer.length / 2
+      );
+      let hasNonZero = false;
+      let sumSquares = 0;
+
+      for (let i = 0; i < int16Array.length; i++) {
+        const sample = int16Array[i];
+        if (sample !== 0) hasNonZero = true;
+        sumSquares += sample * sample;
+      }
+
+      const rms = Math.sqrt(sumSquares / int16Array.length) || 0;
+      const RMS_THRESHOLD = 10; // Same threshold as live audio
+
+      if (!hasNonZero || rms <= RMS_THRESHOLD) {
+        console.log(
+          `⏭️ [Microphone] Skipping transcription: ${path.basename(
+            mp3FilePath
+          )} contains only silence (rms=${rms.toFixed(
+            2
+          )}, hasNonZero=${hasNonZero})`
+        );
+        return;
+      }
+
+      console.log(
+        `✅ [Microphone] Audio validation passed: rms=${rms.toFixed(
+          2
+        )}, hasNonZero=${hasNonZero}, size=${rawBuffer.length} bytes`
+      );
+    }
+
     // Get API key from the client
     const apiKey = deepgramClient.key;
     if (!apiKey) {
@@ -1092,80 +1151,99 @@ ipcMain.handle(
           microphoneSampleRate = sampleRate;
         }
 
-        // Save microphone audio chunks to file
-        microphoneAudioChunks.push(buffer);
-        microphoneAudioChunkCount++;
+        // Analyze audio quality first to determine if it has data
+        const int16View = new Int16Array(
+          buffer.buffer,
+          buffer.byteOffset,
+          buffer.length / 2
+        );
+        let sum = 0;
+        let peak = 0;
+        let nonZeroCount = 0;
+        let sumSquares = 0;
 
-        // Log first few chunks for debugging with audio quality info
-        if (microphoneAudioChunkCount <= 3) {
-          // Analyze audio quality
-          const int16View = new Int16Array(
-            buffer.buffer,
-            buffer.byteOffset,
-            buffer.length / 2
-          );
-          let sum = 0;
-          let peak = 0;
-          let nonZeroCount = 0;
-
-          for (let i = 0; i < int16View.length; i++) {
-            const abs = Math.abs(int16View[i]);
-            sum += abs;
-            if (abs > peak) peak = abs;
-            if (abs > 0) nonZeroCount++;
-          }
-
-          const avg = sum / int16View.length;
-          const rms = Math.sqrt(
-            int16View.reduce((s, v) => s + v * v, 0) / int16View.length
-          );
-
-          console.log(`📊 [Microphone] Chunk ${microphoneAudioChunkCount}:`, {
-            bytes: buffer.length,
-            samples: int16View.length,
-            sampleRate: sampleRate || microphoneSampleRate,
-            avg: avg.toFixed(2),
-            rms: rms.toFixed(2),
-            peak: peak,
-            nonZero: nonZeroCount,
-            percentNonZero:
-              ((nonZeroCount / int16View.length) * 100).toFixed(2) + "%",
-          });
-
-          // Warn if audio level is too low
-          if (peak < 1000) {
-            console.warn(
-              `⚠️ [Microphone] WARNING: Audio level is very low (peak: ${peak})!`
-            );
-            console.warn(
-              `   For clear transcription, peak should be 5000-15000.`
-            );
-            console.warn(
-              `   Please check: 1) Correct microphone selected, 2) Microphone volume in System Preferences`
-            );
-
-            // Send warning to renderer
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send(
-                "microphone-error",
-                `⚠️ Microphone level too low (peak: ${peak}). Please increase microphone volume in System Preferences > Sound > Input.`
-              );
-            }
-          } else if (peak >= 1000 && peak < 5000) {
-            console.log(
-              `📢 [Microphone] Audio level is low but usable (peak: ${peak}). For best results, increase microphone volume.`
-            );
-          } else {
-            console.log(`✅ [Microphone] Audio level is good (peak: ${peak})`);
-          }
+        for (let i = 0; i < int16View.length; i++) {
+          const abs = Math.abs(int16View[i]);
+          const val = int16View[i];
+          sum += abs;
+          sumSquares += val * val;
+          if (abs > peak) peak = abs;
+          if (abs > 0) nonZeroCount++;
         }
 
-        // Save as MP3 file every N chunks
-        if (microphoneAudioChunkCount % MICROPHONE_CHUNKS_PER_FILE === 0) {
-          console.log(
-            `📦 [Microphone] Reached ${microphoneAudioChunkCount} chunks, saving to file...`
-          );
-          saveMicrophoneAudioChunksAsMP3();
+        const avg = sum / int16View.length;
+        const rms = Math.sqrt(sumSquares / int16View.length);
+        const hasNonZero = nonZeroCount > 0;
+
+        // Check if audio has actual data before saving
+        const RMS_THRESHOLD = 10; // Same threshold as speaker audio
+        const hasAudioData = hasNonZero && rms > RMS_THRESHOLD;
+
+        if (hasAudioData) {
+          // Save microphone audio chunks to file only if it has data
+          microphoneAudioChunks.push(buffer);
+          microphoneAudioChunkCount++;
+
+          // Log first few chunks for debugging with audio quality info
+          if (microphoneAudioChunkCount <= 3) {
+            console.log(`📊 [Microphone] Chunk ${microphoneAudioChunkCount}:`, {
+              bytes: buffer.length,
+              samples: int16View.length,
+              sampleRate: sampleRate || microphoneSampleRate,
+              avg: avg.toFixed(2),
+              rms: rms.toFixed(2),
+              peak: peak,
+              nonZero: nonZeroCount,
+              percentNonZero:
+                ((nonZeroCount / int16View.length) * 100).toFixed(2) + "%",
+            });
+
+            // Warn if audio level is too low
+            if (peak < 1000) {
+              console.warn(
+                `⚠️ [Microphone] WARNING: Audio level is very low (peak: ${peak})!`
+              );
+              console.warn(
+                `   For clear transcription, peak should be 5000-15000.`
+              );
+              console.warn(
+                `   Please check: 1) Correct microphone selected, 2) Microphone volume in System Preferences`
+              );
+
+              // Send warning to renderer
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send(
+                  "microphone-error",
+                  `⚠️ Microphone level too low (peak: ${peak}). Please increase microphone volume in System Preferences > Sound > Input.`
+                );
+              }
+            } else if (peak >= 1000 && peak < 5000) {
+              console.log(
+                `📢 [Microphone] Audio level is low but usable (peak: ${peak}). For best results, increase microphone volume.`
+              );
+            } else {
+              console.log(
+                `✅ [Microphone] Audio level is good (peak: ${peak})`
+              );
+            }
+          }
+
+          // Save as MP3 file every N chunks
+          if (microphoneAudioChunkCount % MICROPHONE_CHUNKS_PER_FILE === 0) {
+            console.log(
+              `📦 [Microphone] Reached ${microphoneAudioChunkCount} chunks, saving to file...`
+            );
+            saveMicrophoneAudioChunksAsMP3();
+          }
+        } else {
+          // Log occasionally to show we're skipping empty/silent audio
+          if (microphoneAudioChunkCount % 100 === 0) {
+            console.log(
+              `⏭️ [Microphone] Skipping empty/silent audio (rms=${rms.toFixed(
+                2
+              )}, hasNonZero=${hasNonZero}) - not saving`
+            );
+          }
         }
 
         return { success: true };
