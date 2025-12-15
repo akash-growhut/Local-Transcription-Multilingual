@@ -10,6 +10,13 @@ class AudioCapture {
     this.speakerProcessor = null;
     this.isMicrophoneCapturing = false;
     this.isSpeakerCapturing = false;
+    this.isMicrophoneMuted = false;
+  }
+
+  // Set microphone mute state
+  setMicrophoneMuted(muted) {
+    this.isMicrophoneMuted = muted;
+    console.log(`Microphone ${muted ? "muted" : "unmuted"} in AudioCapture`);
   }
 
   // Start microphone capture
@@ -83,7 +90,7 @@ class AudioCapture {
       let chunkCount = 0;
 
       this.microphoneProcessor.onaudioprocess = (e) => {
-        if (this.isMicrophoneCapturing) {
+        if (this.isMicrophoneCapturing && !this.isMicrophoneMuted) {
           const inputData = e.inputBuffer.getChannelData(0);
 
           // Log audio quality for first few chunks

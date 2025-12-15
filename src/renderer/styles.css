@@ -248,6 +248,7 @@ input:focus {
 .control-buttons {
   display: flex;
   gap: var(--space-3);
+  align-items: center;
 }
 
 .btn-large {
@@ -255,6 +256,49 @@ input:focus {
   font-size: 1rem;
   height: 48px;
   min-width: 180px;
+}
+
+.btn-icon-large {
+  padding: var(--space-3);
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-secondary {
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-card);
+  border-color: var(--border-highlight);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+
+.btn-secondary.muted {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: var(--danger);
+  color: var(--danger);
+  animation: pulse-muted 2s infinite;
+}
+
+.btn-secondary.muted:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: var(--danger);
+}
+
+@keyframes pulse-muted {
+  0%, 100% { 
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% { 
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0);
+  }
 }
 
 /* Chat Container */
@@ -333,6 +377,21 @@ input:focus {
   margin: auto;
 }
 
+/* System messages */
+.system-message {
+  text-align: center;
+  padding: var(--space-2) var(--space-4);
+  margin: var(--space-2) auto;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  max-width: 80%;
+  transition: opacity 0.3s ease;
+  font-style: italic;
+}
+
 .status-badge {
   font-size: 0.7rem;
   font-weight: 700;
@@ -346,7 +405,12 @@ input:focus {
 
 .status-badge.connected { color: var(--success); background: rgba(16, 185, 129, 0.1); }
 .status-badge.recording { color: var(--warning); background: rgba(245, 158, 11, 0.1); animation: pulse 2s infinite; }
-.status-badge.error { color: var(--danger); background: rgba(239, 68, 68, 0.1); }
+.status-badge.error { 
+  color: var(--danger); 
+  background: rgba(239, 68, 68, 0.15); 
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  font-weight: 700;
+}
 
 @keyframes pulse {
   0% { opacity: 1; }
@@ -717,10 +781,16 @@ input:focus {
   
   .control-buttons {
     width: 100%;
+    flex-wrap: wrap;
   }
   
-  .control-buttons button {
+  .control-buttons .btn-large {
     flex: 1;
+    min-width: 140px;
+  }
+  
+  .control-buttons .btn-icon-large {
+    flex: 0 0 48px;
   }
   
   .info-grid {

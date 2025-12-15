@@ -4,6 +4,7 @@ let audioCapture;
 let deepgramApiKey = "";
 let microphoneTranscript = "";
 let speakerTranscript = "";
+let isMicrophoneMuted = false;
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", () => {
@@ -37,6 +38,9 @@ function setupEventListeners() {
   // Unified controls - Start both mic and speaker
   document.getElementById("startAll").addEventListener("click", startAll);
   document.getElementById("stopAll").addEventListener("click", stopAll);
+
+  // Mute button
+  document.getElementById("muteMic").addEventListener("click", toggleMute);
 
   // Listen for transcript events (including file-based transcripts)
   window.electronAPI.onTranscript((data) => {
@@ -152,14 +156,18 @@ async function startAll() {
   // Reset transcript tracking for new session
   resetSpeakerTranscriptTracking();
 
+  // Reset mute state
+  isMicrophoneMuted = false;
+
   // Clear chat messages
   const chatMessages = document.getElementById("chatMessages");
   if (chatMessages) chatMessages.innerHTML = "";
 
   try {
-    // Disable start button, enable stop button
+    // Disable start button, enable stop and mute buttons
     document.getElementById("startAll").disabled = true;
     document.getElementById("stopAll").disabled = false;
+    document.getElementById("muteMic").disabled = false;
 
     // Hide help text when recording
     const helpText = document.getElementById("speakerHelp");
@@ -256,6 +264,11 @@ async function stopAll() {
     // Update buttons
     document.getElementById("startAll").disabled = false;
     document.getElementById("stopAll").disabled = true;
+    document.getElementById("muteMic").disabled = true;
+
+    // Reset mute state and button
+    isMicrophoneMuted = false;
+    updateMuteButton();
 
     // Show help text again
     const helpText = document.getElementById("speakerHelp");
@@ -263,6 +276,73 @@ async function stopAll() {
   } catch (error) {
     console.error("Error stopping recording:", error);
     showError(`Error stopping: ${error.message}`);
+  }
+}
+
+// Toggle microphone mute
+function toggleMute() {
+  isMicrophoneMuted = !isMicrophoneMuted;
+
+  // Update AudioCapture mute state
+  if (audioCapture) {
+    audioCapture.setMicrophoneMuted(isMicrophoneMuted);
+  }
+
+  // Update UI
+  updateMuteButton();
+
+  // Update status
+  if (isMicrophoneMuted) {
+    updateStatus("micStatus", "Muted", "error");
+    console.log("🔇 Microphone muted");
+    // Add system message to chat
+    addSystemMessage("🔇 Microphone muted - not transcribing");
+  } else {
+    updateStatus("micStatus", "Recording", "recording");
+    console.log("🎤 Microphone unmuted");
+    // Add system message to chat
+    addSystemMessage("🎤 Microphone unmuted - transcribing resumed");
+  }
+}
+
+// Add system message to chat
+function addSystemMessage(text) {
+  const chatMessages = document.getElementById("chatMessages");
+  if (!chatMessages) return;
+
+  const systemMsg = document.createElement("div");
+  systemMsg.className = "system-message";
+  systemMsg.textContent = text;
+  chatMessages.appendChild(systemMsg);
+
+  // Auto-scroll to bottom
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+
+  // Remove system message after 3 seconds
+  setTimeout(() => {
+    if (systemMsg.parentNode) {
+      systemMsg.style.opacity = "0";
+      setTimeout(() => systemMsg.remove(), 300);
+    }
+  }, 3000);
+}
+
+// Update mute button appearance
+function updateMuteButton() {
+  const muteBtn = document.getElementById("muteMic");
+  const muteIcon = document.getElementById("muteIcon");
+  const unmuteIcon = document.getElementById("unmuteIcon");
+
+  if (isMicrophoneMuted) {
+    muteBtn.classList.add("muted");
+    muteBtn.title = "Unmute Microphone";
+    muteIcon.style.display = "none";
+    unmuteIcon.style.display = "block";
+  } else {
+    muteBtn.classList.remove("muted");
+    muteBtn.title = "Mute Microphone";
+    muteIcon.style.display = "block";
+    unmuteIcon.style.display = "none";
   }
 }
 
