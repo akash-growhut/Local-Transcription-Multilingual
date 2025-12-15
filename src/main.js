@@ -206,6 +206,15 @@ function saveAudioChunksAsMP3() {
           `⚠️ Could not delete raw file: ${path.basename(rawFilePath)}`
         );
       }
+
+      // Delete MP3 file after transcription
+      try {
+        fs.unlinkSync(mp3FilePath);
+      } catch (e) {
+        console.log(
+          `⚠️ Could not delete MP3 file: ${path.basename(mp3FilePath)}`
+        );
+      }
     }
   });
 
