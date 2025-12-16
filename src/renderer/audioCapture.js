@@ -11,6 +11,8 @@ class AudioCapture {
     this.isMicrophoneCapturing = false;
     this.isSpeakerCapturing = false;
     this.isMicrophoneMuted = false;
+    this.rnnoiseEnabled = true;
+    this.rnnoiseAvailable = false;
   }
 
   // Set microphone mute state
@@ -22,6 +24,22 @@ class AudioCapture {
   // Start microphone capture
   async startMicrophoneCapture(onAudioData) {
     try {
+      // Check if RNNoise is available (currently loaded but not used in audio pipeline)
+      const rnnoiseStatus = await window.electronAPI.checkRNNoise();
+      this.rnnoiseAvailable = rnnoiseStatus.available;
+
+      if (this.rnnoiseAvailable) {
+        console.log(
+          "✅ RNNoise module loaded (currently using browser noise suppression for stability)"
+        );
+        // Initialize RNNoise processor (for future use)
+        await window.electronAPI.initializeRNNoise();
+      } else {
+        console.log(
+          "⚠️ RNNoise not available, using browser's built-in noise suppression"
+        );
+      }
+
       // First, list available microphones
       const devices = await navigator.mediaDevices.enumerateDevices();
       const audioInputs = devices.filter(
@@ -38,12 +56,13 @@ class AudioCapture {
       });
 
       // Request audio with constraints that work better with hardware
+      // Always enable browser noise suppression since RNNoise processing is disabled for stability
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           // Don't force sample rate - use native rate (better quality)
           echoCancellation: true,
-          noiseSuppression: true,
+          noiseSuppression: true, // Always enable browser's noise suppression
           autoGainControl: true,
         },
       });
@@ -91,7 +110,7 @@ class AudioCapture {
 
       this.microphoneProcessor.onaudioprocess = (e) => {
         if (this.isMicrophoneCapturing && !this.isMicrophoneMuted) {
-          const inputData = e.inputBuffer.getChannelData(0);
+          let inputData = e.inputBuffer.getChannelData(0);
 
           // Log audio quality for first few chunks
           if (chunkCount < 5) {
@@ -110,9 +129,14 @@ class AudioCapture {
               peak: peak.toFixed(4),
               hasAudio,
               sampleRate: e.inputBuffer.sampleRate,
+              noiseSuppression: "browser-builtin",
             });
             chunkCount++;
           }
+
+          // RNNoise processing is currently disabled in the audio callback
+          // to prevent crashes from async IPC calls. The browser's built-in
+          // noiseSuppression is being used instead (configured above).
 
           // Convert Float32Array to Int16Array for Deepgram (no resampling!)
           const int16Data = this.floatTo16BitPCM(inputData);
@@ -423,6 +447,13 @@ class AudioCapture {
   stopMicrophoneCapture() {
     this.isMicrophoneCapturing = false;
 
+    // Clean up RNNoise processor
+    if (this.rnnoiseAvailable) {
+      window.electronAPI.destroyRNNoise().catch((err) => {
+        console.error("Error destroying RNNoise:", err);
+      });
+    }
+
     if (this.microphoneProcessor) {
       this.microphoneProcessor.disconnect();
       this.microphoneProcessor = null;
@@ -439,6 +470,22 @@ class AudioCapture {
     }
 
     return { success: true };
+  }
+
+  // Enable or disable RNNoise
+  setRNNoiseEnabled(enabled) {
+    this.rnnoiseEnabled = enabled;
+    if (this.rnnoiseAvailable) {
+      window.electronAPI.setRNNoiseEnabled(enabled).catch((err) => {
+        console.error("Error setting RNNoise state:", err);
+      });
+    }
+    console.log(`🎤 RNNoise ${enabled ? "enabled" : "disabled"}`);
+  }
+
+  // Check if RNNoise is enabled
+  isRNNoiseEnabled() {
+    return this.rnnoiseEnabled && this.rnnoiseAvailable;
   }
 
   // Stop speaker capture

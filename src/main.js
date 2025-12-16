@@ -19,6 +19,19 @@ if (process.platform === "darwin") {
   }
 }
 
+// Try to load RNNoise module for microphone noise cancellation (macOS only)
+let rnnoiseWrapper = null;
+
+if (process.platform === "darwin") {
+  try {
+    rnnoiseWrapper = require("../native-audio/rnnoise-wrapper.js");
+    console.log("✅ RNNoise wrapper loaded");
+  } catch (error) {
+    console.log("⚠️ RNNoise not available:", error.message);
+    console.log("   Microphone will use browser's built-in noise suppression");
+  }
+}
+
 let mainWindow;
 let deepgramClient;
 let microphoneConnection = null;
@@ -677,16 +690,16 @@ const convertToMP3AndTranscribe = async (
         );
       }
 
-      // Delete temp MP3 file
-      try {
-        fs.unlinkSync(mp3FilePath);
-      } catch (e) {
-        console.log(
-          `⚠️ [Microphone] Could not delete MP3 file: ${path.basename(
-            mp3FilePath
-          )}`
-        );
-      }
+      // // Delete temp MP3 file
+      // try {
+      //   fs.unlinkSync(mp3FilePath);
+      // } catch (e) {
+      //   console.log(
+      //     `⚠️ [Microphone] Could not delete MP3 file: ${path.basename(
+      //       mp3FilePath
+      //     )}`
+      //   );
+      // }
     }
   });
 
@@ -1266,6 +1279,69 @@ ipcMain.handle("get-desktop-sources", async (event, options = {}) => {
     });
     return { success: true, sources };
   } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// RNNoise handlers for microphone noise cancellation
+ipcMain.handle("check-rnnoise", async () => {
+  if (!rnnoiseWrapper) {
+    return { available: false };
+  }
+  return { available: rnnoiseWrapper.available() };
+});
+
+ipcMain.handle("initialize-rnnoise", async () => {
+  if (!rnnoiseWrapper) {
+    return { success: false, error: "RNNoise not available" };
+  }
+  try {
+    const success = rnnoiseWrapper.initialize();
+    return { success };
+  } catch (error) {
+    console.error("❌ Failed to initialize RNNoise:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("process-audio-rnnoise", async (event, audioData) => {
+  if (!rnnoiseWrapper) {
+    return audioData; // Return original audio if RNNoise not available
+  }
+  try {
+    // Convert array to Float32Array
+    const float32Data = new Float32Array(audioData);
+    const processedData = rnnoiseWrapper.processFrame(float32Data);
+    // Convert back to array for IPC
+    return Array.from(processedData);
+  } catch (error) {
+    console.error("❌ RNNoise processing error:", error);
+    return audioData; // Return original audio on error
+  }
+});
+
+ipcMain.handle("set-rnnoise-enabled", async (event, enabled) => {
+  if (!rnnoiseWrapper) {
+    return { success: false, error: "RNNoise not available" };
+  }
+  try {
+    rnnoiseWrapper.setEnabled(enabled);
+    return { success: true };
+  } catch (error) {
+    console.error("❌ Failed to set RNNoise state:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("destroy-rnnoise", async () => {
+  if (!rnnoiseWrapper) {
+    return { success: true };
+  }
+  try {
+    rnnoiseWrapper.destroy();
+    return { success: true };
+  } catch (error) {
+    console.error("❌ Failed to destroy RNNoise:", error);
     return { success: false, error: error.message };
   }
 });
