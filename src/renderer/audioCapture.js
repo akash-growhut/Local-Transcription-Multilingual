@@ -13,6 +13,12 @@ class AudioCapture {
     this.isMicrophoneMuted = false;
     this.rnnoiseEnabled = true;
     this.rnnoiseAvailable = false;
+
+    // Web Worker for RNNoise processing
+    this.audioWorker = null;
+    this.workerInitialized = false;
+    this.pendingAudioBuffer = [];
+    this.processingInProgress = false;
   }
 
   // Set microphone mute state
@@ -24,20 +30,49 @@ class AudioCapture {
   // Start microphone capture
   async startMicrophoneCapture(onAudioData) {
     try {
-      // Check if RNNoise is available (currently loaded but not used in audio pipeline)
-      const rnnoiseStatus = await window.electronAPI.checkRNNoise();
-      this.rnnoiseAvailable = rnnoiseStatus.available;
+      // Initialize Web Worker for RNNoise processing
+      try {
+        this.audioWorker = new Worker("audioWorker.js");
+        this.workerInitialized = false;
 
-      if (this.rnnoiseAvailable) {
-        console.log(
-          "✅ RNNoise module loaded (currently using browser noise suppression for stability)"
-        );
-        // Initialize RNNoise processor (for future use)
-        await window.electronAPI.initializeRNNoise();
-      } else {
-        console.log(
-          "⚠️ RNNoise not available, using browser's built-in noise suppression"
-        );
+        // Set up worker message handler
+        this.audioWorker.onmessage = (e) => {
+          const { type, data } = e.data;
+
+          if (type === "init-complete") {
+            this.workerInitialized = true;
+            this.rnnoiseAvailable = true;
+            console.log("✅ RNNoise Web Worker initialized successfully");
+          } else if (type === "processed") {
+            // Store processed audio for the callback to pick up
+            this.lastProcessedAudio = data.data;
+            this.processingInProgress = false;
+          } else if (type === "error") {
+            console.error("❌ Worker error:", data.error);
+            this.processingInProgress = false;
+          }
+        };
+
+        this.audioWorker.onerror = (error) => {
+          console.error("❌ Worker failed:", error);
+          this.rnnoiseAvailable = false;
+        };
+
+        // Initialize the worker
+        this.audioWorker.postMessage({ type: "init" });
+
+        // Wait a bit for initialization
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        if (this.workerInitialized) {
+          console.log("✅ RNNoise noise cancellation active via Web Worker");
+        } else {
+          console.log("⚠️ RNNoise worker starting, will be active shortly");
+        }
+      } catch (error) {
+        console.error("❌ Failed to initialize audio worker:", error);
+        this.rnnoiseAvailable = false;
+        console.log("⚠️ Falling back to browser's built-in noise suppression");
       }
 
       // First, list available microphones
@@ -56,13 +91,13 @@ class AudioCapture {
       });
 
       // Request audio with constraints that work better with hardware
-      // Always enable browser noise suppression since RNNoise processing is disabled for stability
+      // Disable browser noise suppression if RNNoise worker is available
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           // Don't force sample rate - use native rate (better quality)
           echoCancellation: true,
-          noiseSuppression: true, // Always enable browser's noise suppression
+          noiseSuppression: !this.workerInitialized, // Disable if RNNoise worker active
           autoGainControl: true,
         },
       });
@@ -129,14 +164,37 @@ class AudioCapture {
               peak: peak.toFixed(4),
               hasAudio,
               sampleRate: e.inputBuffer.sampleRate,
-              noiseSuppression: "browser-builtin",
+              noiseSuppression:
+                this.workerInitialized && this.rnnoiseEnabled
+                  ? "RNNoise-WebWorker"
+                  : "browser-builtin",
             });
             chunkCount++;
           }
 
-          // RNNoise processing is currently disabled in the audio callback
-          // to prevent crashes from async IPC calls. The browser's built-in
-          // noiseSuppression is being used instead (configured above).
+          // Process through RNNoise Web Worker if available
+          if (
+            this.workerInitialized &&
+            this.rnnoiseEnabled &&
+            this.audioWorker
+          ) {
+            // Send to worker for processing (non-blocking)
+            if (!this.processingInProgress) {
+              this.processingInProgress = true;
+              this.audioWorker.postMessage({
+                type: "process",
+                data: {
+                  audioData: Array.from(inputData),
+                  timestamp: Date.now(),
+                },
+              });
+            }
+
+            // Use last processed audio if available, otherwise use current (first chunk scenario)
+            if (this.lastProcessedAudio) {
+              inputData = new Float32Array(this.lastProcessedAudio);
+            }
+          }
 
           // Convert Float32Array to Int16Array for Deepgram (no resampling!)
           const int16Data = this.floatTo16BitPCM(inputData);
@@ -447,11 +505,13 @@ class AudioCapture {
   stopMicrophoneCapture() {
     this.isMicrophoneCapturing = false;
 
-    // Clean up RNNoise processor
-    if (this.rnnoiseAvailable) {
-      window.electronAPI.destroyRNNoise().catch((err) => {
-        console.error("Error destroying RNNoise:", err);
-      });
+    // Clean up Web Worker
+    if (this.audioWorker) {
+      this.audioWorker.postMessage({ type: "terminate" });
+      this.audioWorker.terminate();
+      this.audioWorker = null;
+      this.workerInitialized = false;
+      console.log("🔴 Audio Worker terminated");
     }
 
     if (this.microphoneProcessor) {
@@ -475,17 +535,29 @@ class AudioCapture {
   // Enable or disable RNNoise
   setRNNoiseEnabled(enabled) {
     this.rnnoiseEnabled = enabled;
-    if (this.rnnoiseAvailable) {
-      window.electronAPI.setRNNoiseEnabled(enabled).catch((err) => {
-        console.error("Error setting RNNoise state:", err);
+
+    // Send to worker if available
+    if (this.audioWorker && this.workerInitialized) {
+      this.audioWorker.postMessage({
+        type: "set-enabled",
+        data: { enabled },
       });
     }
+
     console.log(`🎤 RNNoise ${enabled ? "enabled" : "disabled"}`);
   }
 
   // Check if RNNoise is enabled
   isRNNoiseEnabled() {
-    return this.rnnoiseEnabled && this.rnnoiseAvailable;
+    return this.rnnoiseEnabled && this.workerInitialized;
+  }
+
+  // Reset RNNoise processor
+  resetRNNoise() {
+    if (this.audioWorker && this.workerInitialized) {
+      this.audioWorker.postMessage({ type: "reset" });
+      console.log("🔄 RNNoise processor reset");
+    }
   }
 
   // Stop speaker capture
