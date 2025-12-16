@@ -581,9 +581,6 @@ function updatePlatformInfo() {
     }
   }
 
-  // Update permissions info based on platform
-  updatePermissionsInfo(platformText);
-
   // Update connection status
   const updateConnectionStatus = () => {
     const micRecording = document
@@ -605,56 +602,4 @@ function updatePlatformInfo() {
   // Update status periodically
   setInterval(updateConnectionStatus, 1000);
   updateConnectionStatus();
-}
-
-function updatePermissionsInfo(platform) {
-  const permissionsContent = document.getElementById("permissionsContent");
-
-  if (platform === "macOS") {
-    permissionsContent.innerHTML = `
-      <p><strong>Current Method:</strong> Browser screen sharing API</p>
-      <ul>
-        <li>✅ Works immediately, no setup required</li>
-        <li>⚠️ Requires screen sharing permission dialog</li>
-        <li>⚠️ User must manually select audio source</li>
-      </ul>
-      <p><strong>Recommended for Production:</strong></p>
-      <ul>
-        <li><strong>macOS 13+:</strong> ScreenCaptureKit native module</li>
-        <li class="nested-item">→ One-time screen recording permission</li>
-        <li class="nested-item">→ Silent, automatic capture</li>
-        <li><strong>macOS &lt;13:</strong> BlackHole virtual audio device</li>
-        <li class="nested-item">→ Requires BlackHole installation</li>
-      </ul>
-      <p class="note">📖 See NATIVE_MODULE_NOTES.md for integration guide</p>
-    `;
-  } else if (platform === "Windows") {
-    permissionsContent.innerHTML = `
-      <p><strong>Current Method:</strong> Browser screen sharing API</p>
-      <ul>
-        <li>✅ Works immediately, no setup required</li>
-        <li>⚠️ Requires screen sharing permission dialog</li>
-        <li>⚠️ User must manually select audio source</li>
-      </ul>
-      <p><strong>Recommended for Production:</strong></p>
-      <ul>
-        <li><strong>WASAPI Loopback:</strong> Native module</li>
-        <li class="nested-item">→ Zero setup required</li>
-        <li class="nested-item">→ Silent, automatic system audio capture</li>
-        <li class="nested-item">→ Captures all system audio</li>
-      </ul>
-      <p class="note">📖 See NATIVE_MODULE_NOTES.md for integration guide</p>
-    `;
-  } else {
-    permissionsContent.innerHTML = `
-      <p><strong>Current Method:</strong> Browser screen sharing API</p>
-      <ul>
-        <li>✅ Works immediately, no setup required</li>
-        <li>⚠️ Requires screen sharing permission</li>
-        <li>⚠️ User must manually select audio source</li>
-      </ul>
-      <p><strong>For Production:</strong> Native audio capture module recommended</p>
-      <p class="note">📖 See NATIVE_MODULE_NOTES.md for platform-specific integration</p>
-    `;
-  }
 }
