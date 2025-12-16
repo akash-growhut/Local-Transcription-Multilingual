@@ -1,7 +1,7 @@
 {
   "name": "native-audio-capture",
   "version": "1.0.0",
-  "description": "Native macOS audio capture using ScreenCaptureKit (pure Objective-C++)",
+  "description": "Cross-platform native audio capture for macOS (ScreenCaptureKit) and Windows (WASAPI)",
   "main": "index.js",
   "scripts": {
     "install": "node-gyp rebuild",

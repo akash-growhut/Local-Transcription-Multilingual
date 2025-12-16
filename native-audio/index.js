@@ -2,7 +2,7 @@
 let nativeModule = null;
 
 try {
-  if (process.platform === "darwin") {
+  if (process.platform === "darwin" || process.platform === "win32") {
     nativeModule = require("./build/Release/speaker_audio_capture.node");
   }
 } catch (error) {
