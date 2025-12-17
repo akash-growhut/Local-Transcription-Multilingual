@@ -503,14 +503,14 @@ function saveAudioChunksAsMP3() {
         );
       }
 
-      // // Delete MP3 file after transcription
-      // try {
-      //   fs.unlinkSync(mp3FilePath);
-      // } catch (e) {
-      //   console.log(
-      //     `⚠️ Could not delete MP3 file: ${path.basename(mp3FilePath)}`
-      //   );
-      // }
+      // Delete MP3 file after transcription
+      try {
+        fs.unlinkSync(mp3FilePath);
+      } catch (e) {
+        console.log(
+          `⚠️ Could not delete MP3 file: ${path.basename(mp3FilePath)}`
+        );
+      }
     }
   });
 
