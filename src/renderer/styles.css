@@ -512,11 +512,13 @@ input:focus {
   font-style: italic;
 }
 
-/* Interim messages in chat */
+/* Interim messages in chat - no animation to prevent flicker */
 .chat-messages .message.interim {
   opacity: 0.7;
   font-style: italic;
   border-style: dashed;
+  animation: none; /* Disable animation for interim to prevent flicker */
+  transition: none; /* No transitions on interim */
 }
 
 .chat-messages .message.interim.user-message {

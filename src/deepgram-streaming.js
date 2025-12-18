@@ -150,17 +150,14 @@ function createDeepgramConnection(config) {
     try {
       const data = JSON.parse(msg.toString());
 
-      // Handle speech started event
+      // Handle speech started event (don't log - too noisy)
       if (data.type === "SpeechStarted") {
-        console.log("🎤 Speech started detected");
         return;
       }
 
       // Handle utterance end event - commit any pending interim as final
       if (data.type === "UtteranceEnd") {
-        console.log("🔚 Utterance end detected");
         if (lastInterimTranscript && lastInterimTranscript.trim()) {
-          console.log(`💬 FINAL (from utterance end): "${lastInterimTranscript}"`);
           lastFinalTranscript += lastInterimTranscript + " ";
           if (onTranscript) onTranscript(lastInterimTranscript, true, lastInterimWords);
           lastInterimTranscript = "";
@@ -184,14 +181,12 @@ function createDeepgramConnection(config) {
 
       if (isFinal) {
         // ✅ COMMIT FINAL TEXT
-        console.log(`💬 FINAL: "${transcript}"`);
         lastFinalTranscript += transcript + " ";
         lastInterimTranscript = ""; // Clear interim since we got a final
         lastInterimWords = [];
         if (onTranscript) onTranscript(transcript, true, words);
       } else {
         // ⚠️ INTERIM (do not persist, but track for utterance end)
-        console.log(`📝 INTERIM: "${transcript}"`);
         lastInterimTranscript = transcript;
         lastInterimWords = words;
         if (onTranscript) onTranscript(transcript, false, words);

@@ -459,44 +459,19 @@ function displaySequentialTranscripts() {
 }
 
 function displayTranscript(text, isFinal, source, eventData = null) {
-  console.log(`🎯 [displayTranscript] Called with:`, {
-    text,
-    isFinal,
-    source,
-    eventData,
-  });
-
   // Handle file-based transcripts (from MP3 transcription)
   if (source === "speaker" && eventData && eventData.fileIndex !== undefined) {
     const fileIndex = eventData.fileIndex;
-    console.log(`📝 Received file-based transcript ${fileIndex}: "${text}"`);
     speakerTranscripts.set(fileIndex, {
       text: text,
       timestamp: eventData.timestamp || Date.now(),
     });
-
-    console.log(
-      `📊 Stored transcripts (queue):`,
-      Array.from(speakerTranscripts.keys()).sort((a, b) => a - b)
-    );
-
-    // Display transcripts in sequential order
     displaySequentialTranscripts();
     return;
   }
 
-  // Handle live/streaming transcripts (no fileIndex)
-  console.log(
-    `📝 Received live ${source} transcript (${
-      isFinal ? "FINAL" : "interim"
-    }): "${text}"`
-  );
-
   const chatMessages = document.getElementById("chatMessages");
-  if (!chatMessages) {
-    console.error("Chat messages container not found!");
-    return;
-  }
+  if (!chatMessages) return;
 
   // Remove empty state if exists
   const emptyState = chatMessages.querySelector(".empty-state");
@@ -504,18 +479,19 @@ function displayTranscript(text, isFinal, source, eventData = null) {
     emptyState.remove();
   }
 
+  const messageClass = source === "microphone" ? "user-message" : "speaker-message";
+
   if (isFinal) {
-    // Add final transcript as a message bubble
+    // FINAL transcript - remove any interim for this source, add final at end
+    const existingInterim = chatMessages.querySelector(`.interim[data-source="${source}"]`);
+    if (existingInterim) {
+      existingInterim.remove();
+    }
+
+    // Create final message
     const messageDiv = document.createElement("div");
-    messageDiv.className = `message ${
-      source === "microphone" ? "user-message" : "speaker-message"
-    }`;
-
-    const textSpan = document.createElement("span");
-    textSpan.className = "final";
-    textSpan.textContent = text;
-
-    messageDiv.appendChild(textSpan);
+    messageDiv.className = `message ${messageClass}`;
+    messageDiv.innerHTML = `<span class="final">${escapeHtml(text)}</span>`;
     chatMessages.appendChild(messageDiv);
 
     // Scroll to bottom
@@ -528,25 +504,32 @@ function displayTranscript(text, isFinal, source, eventData = null) {
       speakerTranscript += text + " ";
     }
   } else {
-    // Update interim transcript (remove previous interim for this source, add new one)
-    const existingInterim = chatMessages.querySelector(
-      `.interim[data-source="${source}"]`
-    );
+    // INTERIM transcript - update existing or create new at bottom
+    if (!text) return;
+    
+    let existingInterim = chatMessages.querySelector(`.interim[data-source="${source}"]`);
+    
     if (existingInterim) {
-      existingInterim.remove();
-    }
-
-    if (text) {
+      // Update text only (no DOM manipulation)
+      existingInterim.textContent = text;
+    } else {
+      // Create new interim at bottom
       const interimDiv = document.createElement("div");
-      interimDiv.className = `message interim ${
-        source === "microphone" ? "user-message" : "speaker-message"
-      }`;
+      interimDiv.className = `message interim ${messageClass}`;
       interimDiv.setAttribute("data-source", source);
       interimDiv.textContent = text;
       chatMessages.appendChild(interimDiv);
-      chatMessages.scrollTop = chatMessages.scrollHeight;
     }
+    
+    chatMessages.scrollTop = chatMessages.scrollHeight;
   }
+}
+
+// Helper to escape HTML
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 function updatePlatformInfo() {

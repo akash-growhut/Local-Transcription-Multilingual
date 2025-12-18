@@ -72,6 +72,7 @@ function createMicrophoneConnection(apiKey, sampleRate = 16000) {
     smartFormat: true,
     diarize: true,
     onTranscript: (transcript, isFinal, words) => {
+      console.log(`🎤 [MIC] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}"`);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("transcript", {
           text: transcript,
@@ -125,6 +126,7 @@ function createSpeakerConnection(apiKey) {
     smartFormat: true,
     diarize: true,
     onTranscript: (transcript, isFinal, words) => {
+      console.log(`🔊 [SPK] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}"`);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("transcript", {
           text: transcript,

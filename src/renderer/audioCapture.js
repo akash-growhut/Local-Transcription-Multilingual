@@ -19,15 +19,15 @@ class AudioCapture {
     this.workerInitialized = false;
     this.pendingAudioBuffer = [];
 
-    // Echo cancellation state - DISABLED by default since browser AEC is better
-    // Only enable manually if you notice echo issues without headphones
+    // Echo suppression state - ENABLED to prevent mic from picking up speaker audio
+    // This is critical when not using headphones
     this.speakerAudioEnergy = 0;
-    this.speakerEnergyDecay = 0.95; // Decay factor for speaker energy tracking
-    this.echoSuppressionEnabled = false; // DISABLED - browser AEC handles this better
-    this.echoThreshold = 0.05; // Higher threshold - only trigger on loud speaker audio
-    this.echoSuppressionGain = 0.7; // Less aggressive - keep 70% of mic volume
+    this.speakerEnergyDecay = 0.92; // Slower decay for better tracking
+    this.echoSuppressionEnabled = true; // ENABLED for no-headphone use
+    this.echoThreshold = 0.003; // Very low threshold to detect any speaker audio
+    this.echoSuppressionGain = 0.0; // Fully mute mic when speaker is playing
     this.lastSpeakerAudioTime = 0;
-    this.echoHoldTime = 50; // Shorter hold time
+    this.echoHoldTime = 300; // Hold suppression for 300ms after speaker stops
   }
 
   // Set microphone mute state
@@ -187,21 +187,24 @@ class AudioCapture {
             chunkCount++;
           }
 
-          // Optional echo suppression: only applies if manually enabled
-          // Browser's built-in AEC (echoCancellation: true) handles most cases
-          if (this.echoSuppressionEnabled && this.speakerAudioEnergy > this.echoThreshold) {
+          // Echo suppression: mute mic when speaker is playing to avoid picking up speaker audio
+          // This is essential when not using headphones
+          if (this.echoSuppressionEnabled) {
             const now = Date.now();
             const timeSinceSpeaker = now - this.lastSpeakerAudioTime;
+            const speakerActive = this.speakerAudioEnergy > this.echoThreshold || timeSinceSpeaker < this.echoHoldTime;
 
-            // Only suppress if speaker audio is actively playing
-            if (timeSinceSpeaker < this.echoHoldTime) {
-              // Apply gentle echo suppression
-              const suppressionFactor = this.echoSuppressionGain;
+            if (speakerActive) {
+              // Mute the microphone while speaker is playing
+              // This prevents the mic from picking up and re-transcribing speaker audio
               const suppressedData = new Float32Array(inputData.length);
-              for (let i = 0; i < inputData.length; i++) {
-                suppressedData[i] = inputData[i] * suppressionFactor;
-              }
+              suppressedData.fill(0); // Complete silence
               inputData = suppressedData;
+              
+              // Log occasionally
+              if (chunkCount % 100 === 0) {
+                console.log(`🔇 [Echo] Mic muted (speaker energy: ${this.speakerAudioEnergy.toFixed(4)}, time since: ${timeSinceSpeaker}ms)`);
+              }
             }
           }
 
