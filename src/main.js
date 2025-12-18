@@ -267,10 +267,7 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
           // Send to Deepgram WebSocket (will automatically convert Float32 to Int16)
           if (speakerConnection && speakerConnection.isReady()) {
             // Only send if there's actual audio (basic silence detection)
-            const RMS_THRESHOLD = 0.001; // Very low threshold for Float32
-            if (rms > RMS_THRESHOLD) {
-              speakerConnection.send(floatData);
-            }
+            speakerConnection.send(floatData);
           }
         });
 
@@ -394,10 +391,7 @@ ipcMain.handle(
           const rms = Math.sqrt(sumSquares / int16Array.length);
 
           // Send audio continuously (even if quiet, let Deepgram handle it)
-          const RMS_THRESHOLD = 10;
-          if (rms > RMS_THRESHOLD) {
-            microphoneConnection.send(int16Array);
-          }
+          microphoneConnection.send(int16Array);
         }
         return { success: true };
       }
