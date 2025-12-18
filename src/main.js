@@ -277,7 +277,8 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
 
           // Send speaker audio energy to renderer for echo suppression
           // This allows the mic to know when speaker is playing
-          if (mainWindow && !mainWindow.isDestroyed() && rms > 0.001) {
+          // Always send energy (even if low) so the renderer can track speaker activity
+          if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send("speaker-audio-energy", rms);
           }
 

@@ -21,11 +21,11 @@ class AudioCapture {
 
     // Echo suppression - uses speaker energy from native capture (sent via IPC)
     this.speakerAudioEnergy = 0;
-    this.speakerEnergyDecay = 0.85; // Decay factor
+    this.speakerEnergyDecay = 0.9; // Slower decay for better tracking
     this.echoSuppressionEnabled = true; // ENABLED - now works with native capture via IPC
-    this.echoThreshold = 0.01; // Threshold for speaker activity detection
+    this.echoThreshold = 0.002; // Very low threshold - any speaker audio triggers suppression
     this.lastSpeakerAudioTime = 0;
-    this.echoHoldTime = 400; // Hold suppression for 400ms after speaker stops
+    this.echoHoldTime = 500; // Hold suppression for 500ms after speaker stops
   }
 
   // Set microphone mute state
@@ -36,14 +36,14 @@ class AudioCapture {
 
   // Update speaker audio energy from native capture (called via IPC)
   updateSpeakerEnergy(rms) {
-    // Update speaker energy with exponential moving average
+    // Update speaker energy - use max of decayed value and new value
     this.speakerAudioEnergy = Math.max(
       this.speakerAudioEnergy * this.speakerEnergyDecay,
       rms
     );
     
-    // Track when speaker was last active
-    if (rms > this.echoThreshold) {
+    // Track when speaker was last active (very sensitive threshold)
+    if (rms > 0.0005) {
       this.lastSpeakerAudioTime = Date.now();
     }
   }
@@ -204,6 +204,11 @@ class AudioCapture {
             const now = Date.now();
             const timeSinceSpeaker = now - this.lastSpeakerAudioTime;
             const speakerActive = this.speakerAudioEnergy > this.echoThreshold || timeSinceSpeaker < this.echoHoldTime;
+
+            // Debug logging (only occasionally)
+            if (chunkCount % 200 === 0 && this.speakerAudioEnergy > 0) {
+              console.log(`🔊 [Echo] Speaker energy: ${this.speakerAudioEnergy.toFixed(4)}, threshold: ${this.echoThreshold}, active: ${speakerActive}, timeSince: ${timeSinceSpeaker}ms`);
+            }
 
             if (speakerActive) {
               // Mute the microphone while speaker is playing
