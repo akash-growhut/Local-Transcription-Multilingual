@@ -4,100 +4,92 @@
 // Worker state
 let isInitialized = false;
 let processingEnabled = true;
+let processedCount = 0;
 
-// Simple noise gate implementation (lightweight)
+// Simple noise gate implementation (lightweight and fast)
 class NoiseGate {
   constructor() {
-    this.threshold = 0.01; // -40dB
-    this.attackTime = 0.001; // 1ms
-    this.releaseTime = 0.1; // 100ms
-    this.holdTime = 0.05; // 50ms
+    this.threshold = 0.008; // Slightly lower threshold for better speech detection
+    this.attackCoef = 0.999; // Pre-computed for speed
+    this.releaseCoef = 0.998;
     this.envelope = 0.0;
-    this.holdCounter = 0.0;
-    this.sampleRate = 48000;
+    this.gain = 1.0;
+    this.holdCounter = 0;
+    this.holdSamples = 2400; // ~50ms at 48kHz
   }
 
   process(samples) {
-    const attackCoef = Math.exp(-1.0 / (this.attackTime * this.sampleRate));
-    const releaseCoef = Math.exp(-1.0 / (this.releaseTime * this.sampleRate));
     const output = new Float32Array(samples.length);
+    const len = samples.length;
 
-    for (let i = 0; i < samples.length; i++) {
+    for (let i = 0; i < len; i++) {
       const inputLevel = Math.abs(samples[i]);
 
-      // Envelope follower
+      // Fast envelope follower
       if (inputLevel > this.envelope) {
-        this.envelope =
-          attackCoef * this.envelope + (1.0 - attackCoef) * inputLevel;
-        this.holdCounter = this.holdTime * this.sampleRate;
+        this.envelope = this.attackCoef * this.envelope + (1.0 - this.attackCoef) * inputLevel;
+        this.holdCounter = this.holdSamples;
+      } else if (this.holdCounter > 0) {
+        this.holdCounter--;
       } else {
-        if (this.holdCounter > 0) {
-          this.holdCounter--;
-        } else {
-          this.envelope =
-            releaseCoef * this.envelope + (1.0 - releaseCoef) * inputLevel;
-        }
+        this.envelope = this.releaseCoef * this.envelope + (1.0 - this.releaseCoef) * inputLevel;
       }
 
-      // Apply gate with smooth transitions
-      let gain = this.envelope > this.threshold ? 1.0 : 0.0;
+      // Smooth gate with faster response
+      const targetGain = this.envelope > this.threshold ? 1.0 : 0.1; // Don't fully silence, just attenuate
+      this.gain = this.gain * 0.9 + targetGain * 0.1;
 
-      // Exponential smoothing for gain to avoid clicks
-      if (!this.prevGain) this.prevGain = 1.0;
-      gain = this.prevGain * 0.95 + gain * 0.05;
-      this.prevGain = gain;
-
-      output[i] = samples[i] * gain;
+      output[i] = samples[i] * this.gain;
     }
 
     return output;
   }
 }
 
-// Spectral noise reduction (simplified for Web Worker)
-class SpectralNoiseReduction {
-  constructor(frameSize = 480) {
-    this.frameSize = frameSize;
-    this.noiseProfile = new Float32Array(frameSize);
-    this.smoothingFactor = 0.95; // How much to smooth noise profile
-    this.noiseLearningFrames = 10;
+// Fast noise reduction using simple statistics
+class FastNoiseReduction {
+  constructor() {
+    this.noiseFloor = 0.005; // Estimated noise floor
+    this.smoothingFactor = 0.98;
     this.framesProcessed = 0;
-  }
-
-  updateNoiseProfile(samples) {
-    for (let i = 0; i < Math.min(samples.length, this.frameSize); i++) {
-      const absVal = Math.abs(samples[i]);
-      this.noiseProfile[i] =
-        this.noiseProfile[i] * this.smoothingFactor +
-        absVal * (1.0 - this.smoothingFactor);
-    }
+    this.learningFrames = 5; // Reduced learning time
   }
 
   process(samples) {
     const output = new Float32Array(samples.length);
+    const len = samples.length;
 
-    // Learn noise profile in first few frames
-    if (this.framesProcessed < this.noiseLearningFrames) {
-      this.updateNoiseProfile(samples);
+    // Calculate RMS of current frame
+    let sumSquares = 0;
+    for (let i = 0; i < len; i++) {
+      sumSquares += samples[i] * samples[i];
+    }
+    const rms = Math.sqrt(sumSquares / len);
+
+    // Learn noise floor from quiet frames
+    if (this.framesProcessed < this.learningFrames) {
+      this.noiseFloor = this.noiseFloor * this.smoothingFactor + rms * (1 - this.smoothingFactor);
       this.framesProcessed++;
-      // During learning, just copy input
       output.set(samples);
       return output;
     }
 
-    // Apply spectral subtraction
-    for (let i = 0; i < samples.length; i++) {
-      const signal = Math.abs(samples[i]);
-      const noise =
-        i < this.frameSize ? this.noiseProfile[i] : this.noiseProfile[0];
+    // Update noise floor slowly when signal is very quiet
+    if (rms < this.noiseFloor * 1.5) {
+      this.noiseFloor = this.noiseFloor * 0.999 + rms * 0.001;
+    }
 
-      // If signal is significantly above noise, keep it
-      if (signal > noise * 2.0) {
-        const gain = Math.max(0.0, Math.min(1.0, 1.0 - noise / signal));
-        output[i] = samples[i] * gain;
+    // Apply soft noise reduction
+    const threshold = this.noiseFloor * 2;
+    for (let i = 0; i < len; i++) {
+      const absVal = Math.abs(samples[i]);
+      if (absVal > threshold) {
+        // Signal above noise, keep it
+        output[i] = samples[i];
       } else {
-        // Signal is in noise floor, attenuate heavily
-        output[i] = samples[i] * 0.1;
+        // Apply soft knee attenuation
+        const ratio = absVal / threshold;
+        output[i] = samples[i] * ratio * ratio; // Quadratic soft knee
       }
     }
 
@@ -105,16 +97,16 @@ class SpectralNoiseReduction {
   }
 
   reset() {
-    this.noiseProfile.fill(0);
+    this.noiseFloor = 0.005;
     this.framesProcessed = 0;
   }
 }
 
 // Initialize processor components
 const noiseGate = new NoiseGate();
-const spectralNR = new SpectralNoiseReduction(480); // 10ms at 48kHz
+const noiseReduction = new FastNoiseReduction();
 
-console.log("🔧 Audio Worker initialized");
+console.log("🔧 Audio Worker initialized with fast processors");
 
 // Handle messages from main thread
 self.onmessage = function (e) {
@@ -124,7 +116,8 @@ self.onmessage = function (e) {
     case "init":
       isInitialized = true;
       processingEnabled = true;
-      spectralNR.reset();
+      noiseReduction.reset();
+      processedCount = 0;
       self.postMessage({
         type: "init-complete",
         success: true,
@@ -147,11 +140,13 @@ self.onmessage = function (e) {
         // Convert array back to Float32Array
         let audioData = new Float32Array(data.audioData);
 
-        // Apply noise reduction
-        audioData = spectralNR.process(audioData);
+        // Apply fast noise reduction pipeline
+        audioData = noiseReduction.process(audioData);
         audioData = noiseGate.process(audioData);
 
-        // Send processed audio back
+        processedCount++;
+
+        // Send processed audio back immediately
         self.postMessage({
           type: "processed",
           data: Array.from(audioData),
@@ -182,7 +177,8 @@ self.onmessage = function (e) {
       break;
 
     case "reset":
-      spectralNR.reset();
+      noiseReduction.reset();
+      processedCount = 0;
       console.log("🔄 Worker: Processor reset");
       self.postMessage({
         type: "reset-complete",

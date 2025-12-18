@@ -37,7 +37,9 @@ let mainWindow;
 let deepgramClient;
 let microphoneConnection = null;
 let speakerConnection = null;
-let microphoneSampleRate = 16000; // Default, will be updated when microphone starts
+let microphoneSampleRate = 48000; // Default to 48kHz (standard for modern Macs)
+let microphoneSampleRateSet = false; // Track if sample rate has been set this session
+global.deepgramApiKey = null; // Store API key globally for reconnection
 
 // Initialize Deepgram client (kept for backward compatibility with file-based transcription if needed)
 function initializeDeepgram(apiKey) {
@@ -189,6 +191,13 @@ ipcMain.handle("initialize-deepgram", async (event, apiKey) => {
 
 ipcMain.handle("start-microphone-capture", async (event, apiKey) => {
   try {
+    // Store API key globally for reconnection
+    global.deepgramApiKey = apiKey;
+    
+    // Reset sample rate tracking for new session
+    microphoneSampleRateSet = false;
+    microphoneSampleRate = 48000; // Reset to default (48kHz for modern Macs)
+    
     // Initialize Deepgram client for backward compatibility
     if (!deepgramClient) {
       deepgramClient = initializeDeepgram(apiKey);
@@ -358,21 +367,24 @@ ipcMain.handle(
 
       // Handle microphone audio (continuous streaming, not batched)
       if (source === "microphone") {
-        // Update sample rate if provided
-        if (sampleRate && sampleRate !== microphoneSampleRate) {
-          console.log(`📊 [Microphone] Sample rate detected: ${sampleRate} Hz`);
+        // Update sample rate if provided - but only recreate once at the start
+        if (sampleRate && sampleRate !== microphoneSampleRate && !microphoneSampleRateSet) {
+          console.log(`📊 [Microphone] Sample rate detected: ${sampleRate} Hz (was ${microphoneSampleRate})`);
           microphoneSampleRate = sampleRate;
+          microphoneSampleRateSet = true; // Only set once per session
 
-          // Recreate connection with new sample rate
-          if (microphoneConnection && deepgramClient) {
-            const apiKey = deepgramClient.key;
-            if (apiKey) {
-              console.log(
-                `🔄 Recreating microphone connection with ${sampleRate}Hz`
-              );
-              createMicrophoneConnection(apiKey, sampleRate);
-            }
+          // Recreate connection with correct sample rate
+          const storedApiKey = global.deepgramApiKey;
+          if (storedApiKey && microphoneConnection) {
+            console.log(`🔄 Recreating microphone connection with ${sampleRate}Hz`);
+            createMicrophoneConnection(storedApiKey, sampleRate);
+            // Wait briefly for connection to establish
+            return { success: true };
           }
+        } else if (sampleRate && !microphoneSampleRateSet) {
+          // First audio chunk with matching sample rate
+          microphoneSampleRateSet = true;
+          console.log(`✅ [Microphone] Sample rate confirmed: ${sampleRate} Hz`);
         }
 
         if (microphoneConnection && microphoneConnection.isReady()) {

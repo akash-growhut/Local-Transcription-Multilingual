@@ -65,6 +65,7 @@ function createDeepgramConnection(config) {
   }
 
   // Build WebSocket URL with query parameters
+  // Add endpointing and VAD settings for reliable final transcripts
   const params = new URLSearchParams({
     model,
     language,
@@ -75,6 +76,10 @@ function createDeepgramConnection(config) {
     punctuate: punctuate.toString(),
     smart_format: smartFormat.toString(),
     diarize: diarize.toString(),
+    // Endpointing settings - critical for getting final transcripts
+    endpointing: "300", // Finalize after 300ms of silence (faster response)
+    utterance_end_ms: "1000", // Consider utterance ended after 1s silence
+    vad_events: "true", // Enable VAD events for better speech detection
   });
 
   const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
@@ -95,11 +100,31 @@ function createDeepgramConnection(config) {
 
   let isConnected = false;
   let lastFinalTranscript = "";
+  let keepAliveInterval = null;
+  let lastAudioSentTime = Date.now();
 
   // WebSocket event handlers
   ws.on("open", () => {
     console.log("✅ Deepgram WebSocket connected");
     isConnected = true;
+
+    // Start keepalive to maintain connection
+    // Send a KeepAlive message every 8 seconds to prevent timeout
+    keepAliveInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        const timeSinceLastAudio = Date.now() - lastAudioSentTime;
+        // Only send keepalive if we haven't sent audio recently
+        if (timeSinceLastAudio > 5000) {
+          try {
+            ws.send(JSON.stringify({ type: "KeepAlive" }));
+            console.log("💓 Deepgram keepalive sent");
+          } catch (err) {
+            console.error("❌ Keepalive error:", err.message);
+          }
+        }
+      }
+    }, 8000);
+
     if (onOpen) onOpen();
   });
 
@@ -111,12 +136,42 @@ function createDeepgramConnection(config) {
   ws.on("close", () => {
     console.log("🔌 Deepgram WebSocket closed");
     isConnected = false;
+
+    // Clear keepalive interval
+    if (keepAliveInterval) {
+      clearInterval(keepAliveInterval);
+      keepAliveInterval = null;
+    }
+
     if (onClose) onClose();
   });
+
+  // Track the last interim transcript to commit on speech end
+  let lastInterimTranscript = "";
+  let lastInterimWords = [];
 
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg.toString());
+
+      // Handle speech started event
+      if (data.type === "SpeechStarted") {
+        console.log("🎤 Speech started detected");
+        return;
+      }
+
+      // Handle utterance end event - commit any pending interim as final
+      if (data.type === "UtteranceEnd") {
+        console.log("🔚 Utterance end detected");
+        if (lastInterimTranscript && lastInterimTranscript.trim()) {
+          console.log(`💬 FINAL (from utterance end): "${lastInterimTranscript}"`);
+          lastFinalTranscript += lastInterimTranscript + " ";
+          if (onTranscript) onTranscript(lastInterimTranscript, true, lastInterimWords);
+          lastInterimTranscript = "";
+          lastInterimWords = [];
+        }
+        return;
+      }
 
       // Check if we have valid channel data
       if (!data.channel) return;
@@ -135,10 +190,14 @@ function createDeepgramConnection(config) {
         // ✅ COMMIT FINAL TEXT
         console.log(`💬 FINAL: "${transcript}"`);
         lastFinalTranscript += transcript + " ";
+        lastInterimTranscript = ""; // Clear interim since we got a final
+        lastInterimWords = [];
         if (onTranscript) onTranscript(transcript, true, words);
       } else {
-        // ⚠️ INTERIM (do not persist)
+        // ⚠️ INTERIM (do not persist, but track for utterance end)
         console.log(`📝 INTERIM: "${transcript}"`);
+        lastInterimTranscript = transcript;
+        lastInterimWords = words;
         if (onTranscript) onTranscript(transcript, false, words);
       }
     } catch (error) {
@@ -155,7 +214,7 @@ function createDeepgramConnection(config) {
      */
     send: (audioData) => {
       if (!isConnected || ws.readyState !== WebSocket.OPEN) {
-        console.warn("⚠️ WebSocket not ready, skipping audio chunk");
+        // Don't log every skip - it's normal during connection setup
         return;
       }
 
@@ -183,6 +242,7 @@ function createDeepgramConnection(config) {
         }
 
         ws.send(buffer);
+        lastAudioSentTime = Date.now(); // Track for keepalive
       } catch (error) {
         console.error("❌ Error sending audio:", error);
         if (onError) onError(error);
@@ -193,6 +253,12 @@ function createDeepgramConnection(config) {
      * Close the WebSocket connection gracefully
      */
     close: () => {
+      // Clear keepalive first
+      if (keepAliveInterval) {
+        clearInterval(keepAliveInterval);
+        keepAliveInterval = null;
+      }
+
       if (ws.readyState === WebSocket.OPEN) {
         try {
           // Send CloseStream message

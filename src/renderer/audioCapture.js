@@ -18,7 +18,15 @@ class AudioCapture {
     this.audioWorker = null;
     this.workerInitialized = false;
     this.pendingAudioBuffer = [];
-    this.processingInProgress = false;
+
+    // Echo cancellation state
+    this.speakerAudioEnergy = 0;
+    this.speakerEnergyDecay = 0.95; // Decay factor for speaker energy tracking
+    this.echoSuppressionEnabled = true;
+    this.echoThreshold = 0.02; // Minimum speaker energy to trigger suppression
+    this.echoSuppressionGain = 0.3; // Reduce mic volume when echo detected
+    this.lastSpeakerAudioTime = 0;
+    this.echoHoldTime = 150; // Hold echo suppression for 150ms after speaker stops
   }
 
   // Set microphone mute state
@@ -34,6 +42,7 @@ class AudioCapture {
       try {
         this.audioWorker = new Worker("audioWorker.js");
         this.workerInitialized = false;
+        this.processedAudioQueue = []; // Queue for processed audio chunks
 
         // Set up worker message handler
         this.audioWorker.onmessage = (e) => {
@@ -44,12 +53,10 @@ class AudioCapture {
             this.rnnoiseAvailable = true;
             console.log("✅ RNNoise Web Worker initialized successfully");
           } else if (type === "processed") {
-            // Store processed audio for the callback to pick up
-            this.lastProcessedAudio = data.data;
-            this.processingInProgress = false;
+            // Queue processed audio for immediate use
+            this.processedAudioQueue.push(new Float32Array(data.data));
           } else if (type === "error") {
             console.error("❌ Worker error:", data.error);
-            this.processingInProgress = false;
           }
         };
 
@@ -62,7 +69,7 @@ class AudioCapture {
         this.audioWorker.postMessage({ type: "init" });
 
         // Wait a bit for initialization
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 50));
 
         if (this.workerInitialized) {
           console.log("✅ RNNoise noise cancellation active via Web Worker");
@@ -90,15 +97,18 @@ class AudioCapture {
         );
       });
 
-      // Request audio with constraints that work better with hardware
-      // Disable browser noise suppression if RNNoise worker is available
+      // Request audio with aggressive echo cancellation constraints
+      // This helps prevent speaker audio from being picked up when not using headphones
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          // Don't force sample rate - use native rate (better quality)
-          echoCancellation: true,
-          noiseSuppression: !this.workerInitialized, // Disable if RNNoise worker active
-          autoGainControl: true,
+          // Aggressive echo cancellation settings
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true }, // Keep browser noise suppression as backup
+          autoGainControl: { ideal: true },
+          // Additional constraints for better echo handling
+          latency: { ideal: 0.01 }, // Request low latency
+          sampleSize: { ideal: 16 },
         },
       });
 
@@ -134,9 +144,9 @@ class AudioCapture {
       this.microphoneSampleRate = this.microphoneContext.sampleRate;
 
       // Create a script processor to capture audio data
-      // Use smaller buffer for lower latency
+      // Use smaller buffer (2048) for lower latency (~42ms at 48kHz instead of ~85ms with 4096)
       this.microphoneProcessor = this.microphoneContext.createScriptProcessor(
-        4096,
+        2048,
         1,
         1
       );
@@ -147,12 +157,15 @@ class AudioCapture {
         if (this.isMicrophoneCapturing && !this.isMicrophoneMuted) {
           let inputData = e.inputBuffer.getChannelData(0);
 
+          // Calculate RMS for echo detection and logging
+          let sumSquares = 0;
+          for (let i = 0; i < inputData.length; i++) {
+            sumSquares += inputData[i] * inputData[i];
+          }
+          const rms = Math.sqrt(sumSquares / inputData.length);
+
           // Log audio quality for first few chunks
           if (chunkCount < 5) {
-            const rms = Math.sqrt(
-              inputData.reduce((sum, val) => sum + val * val, 0) /
-                inputData.length
-            );
             const peak = Math.max(...Array.from(inputData).map(Math.abs));
             const hasAudio = inputData.some(
               (sample) => Math.abs(sample) > 0.001
@@ -164,6 +177,7 @@ class AudioCapture {
               peak: peak.toFixed(4),
               hasAudio,
               sampleRate: e.inputBuffer.sampleRate,
+              echoSuppression: this.echoSuppressionEnabled ? "active" : "off",
               noiseSuppression:
                 this.workerInitialized && this.rnnoiseEnabled
                   ? "RNNoise-WebWorker"
@@ -172,27 +186,57 @@ class AudioCapture {
             chunkCount++;
           }
 
+          // Echo suppression: reduce mic input when speaker is playing
+          // This prevents speaker audio from being picked up as "you speaking"
+          if (this.echoSuppressionEnabled) {
+            const now = Date.now();
+            const timeSinceSpeaker = now - this.lastSpeakerAudioTime;
+
+            // Check if speaker was recently active
+            if (
+              this.speakerAudioEnergy > this.echoThreshold ||
+              timeSinceSpeaker < this.echoHoldTime
+            ) {
+              // Apply echo suppression - reduce gain when speaker is active
+              const suppressionFactor = this.echoSuppressionGain;
+
+              // Create a copy to avoid modifying the original buffer
+              const suppressedData = new Float32Array(inputData.length);
+              for (let i = 0; i < inputData.length; i++) {
+                suppressedData[i] = inputData[i] * suppressionFactor;
+              }
+              inputData = suppressedData;
+
+              // Log occasional echo suppression events
+              if (chunkCount % 50 === 0) {
+                console.log(
+                  `🔇 [Echo] Suppressing mic input (speaker energy: ${this.speakerAudioEnergy.toFixed(
+                    4
+                  )})`
+                );
+              }
+            }
+          }
+
           // Process through RNNoise Web Worker if available
+          // Send every chunk to worker (no skipping)
           if (
             this.workerInitialized &&
             this.rnnoiseEnabled &&
             this.audioWorker
           ) {
             // Send to worker for processing (non-blocking)
-            if (!this.processingInProgress) {
-              this.processingInProgress = true;
-              this.audioWorker.postMessage({
-                type: "process",
-                data: {
-                  audioData: Array.from(inputData),
-                  timestamp: Date.now(),
-                },
-              });
-            }
+            this.audioWorker.postMessage({
+              type: "process",
+              data: {
+                audioData: Array.from(inputData),
+                timestamp: Date.now(),
+              },
+            });
 
-            // Use last processed audio if available, otherwise use current (first chunk scenario)
-            if (this.lastProcessedAudio) {
-              inputData = new Float32Array(this.lastProcessedAudio);
+            // Use processed audio from queue if available
+            if (this.processedAudioQueue && this.processedAudioQueue.length > 0) {
+              inputData = this.processedAudioQueue.shift();
             }
           }
 
@@ -399,8 +443,9 @@ class AudioCapture {
         audioSamplesReceived = 0; // Reset counter
       }, 3000);
 
+      // Use smaller buffer (2048) for lower latency
       this.speakerProcessor = this.speakerContext.createScriptProcessor(
-        4096,
+        2048,
         1,
         1
       );
@@ -409,11 +454,25 @@ class AudioCapture {
         if (this.isSpeakerCapturing) {
           const inputData = e.inputBuffer.getChannelData(0);
 
+          // Calculate RMS energy for echo detection
+          let sumSquares = 0;
+          for (let i = 0; i < inputData.length; i++) {
+            sumSquares += inputData[i] * inputData[i];
+          }
+          const rms = Math.sqrt(sumSquares / inputData.length);
+
+          // Update speaker energy tracking for echo cancellation
+          // Use exponential moving average for smooth tracking
+          this.speakerAudioEnergy =
+            this.speakerAudioEnergy * this.speakerEnergyDecay +
+            rms * (1 - this.speakerEnergyDecay);
+
           // Check if there's actual audio (not just silence)
-          const hasAudio = inputData.some((sample) => Math.abs(sample) > 0.001);
+          const hasAudio = rms > 0.001;
           if (hasAudio) {
             audioSamplesReceived++;
             lastAudioCheck = Date.now();
+            this.lastSpeakerAudioTime = Date.now(); // Track when speaker last had audio
           }
 
           const int16Data = this.floatTo16BitPCM(inputData);
@@ -514,6 +573,9 @@ class AudioCapture {
       console.log("🔴 Audio Worker terminated");
     }
 
+    // Clear processed audio queue
+    this.processedAudioQueue = [];
+
     if (this.microphoneProcessor) {
       this.microphoneProcessor.disconnect();
       this.microphoneProcessor = null;
@@ -530,6 +592,41 @@ class AudioCapture {
     }
 
     return { success: true };
+  }
+
+  // Enable or disable echo suppression
+  setEchoSuppressionEnabled(enabled) {
+    this.echoSuppressionEnabled = enabled;
+    console.log(`🔊 Echo suppression ${enabled ? "enabled" : "disabled"}`);
+  }
+
+  // Set echo suppression parameters
+  setEchoSuppressionParams(params) {
+    if (params.threshold !== undefined) {
+      this.echoThreshold = params.threshold;
+    }
+    if (params.gain !== undefined) {
+      this.echoSuppressionGain = params.gain;
+    }
+    if (params.holdTime !== undefined) {
+      this.echoHoldTime = params.holdTime;
+    }
+    console.log(`🔧 Echo suppression params updated:`, {
+      threshold: this.echoThreshold,
+      gain: this.echoSuppressionGain,
+      holdTime: this.echoHoldTime,
+    });
+  }
+
+  // Check if echo suppression is active
+  isEchoSuppressionActive() {
+    const now = Date.now();
+    const timeSinceSpeaker = now - this.lastSpeakerAudioTime;
+    return (
+      this.echoSuppressionEnabled &&
+      (this.speakerAudioEnergy > this.echoThreshold ||
+        timeSinceSpeaker < this.echoHoldTime)
+    );
   }
 
   // Enable or disable RNNoise
@@ -563,6 +660,10 @@ class AudioCapture {
   // Stop speaker capture
   stopSpeakerCapture() {
     this.isSpeakerCapturing = false;
+
+    // Reset echo-related state
+    this.speakerAudioEnergy = 0;
+    this.lastSpeakerAudioTime = 0;
 
     // Clear audio monitoring interval
     if (this.speakerAudioCheckInterval) {
