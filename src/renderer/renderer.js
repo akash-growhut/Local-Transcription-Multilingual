@@ -6,6 +6,12 @@ let microphoneTranscript = "";
 let speakerTranscript = "";
 let isMicrophoneMuted = false;
 
+// Deduplication: Track recent speaker transcripts to filter echo from mic
+// When not using headphones, mic picks up speaker audio - we filter it out
+const recentSpeakerTexts = [];
+const DEDUPE_WINDOW_MS = 3000; // 3 second window for deduplication
+const DEDUPE_SIMILARITY_THRESHOLD = 0.6; // 60% similarity = likely echo
+
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", () => {
   audioCapture = new AudioCapture();
@@ -473,6 +479,34 @@ function displayTranscript(text, isFinal, source, eventData = null) {
   const chatMessages = document.getElementById("chatMessages");
   if (!chatMessages) return;
 
+  // Clean up old entries from deduplication cache
+  const now = Date.now();
+  while (recentSpeakerTexts.length > 0 && now - recentSpeakerTexts[0].time > DEDUPE_WINDOW_MS) {
+    recentSpeakerTexts.shift();
+  }
+
+  // DEDUPLICATION: If this is from microphone, check if it's echo from speaker
+  if (source === "microphone" && isFinal && text.trim()) {
+    const normalizedText = text.toLowerCase().trim();
+    
+    // Check if similar text was recently spoken by speaker
+    for (const entry of recentSpeakerTexts) {
+      const similarity = calculateSimilarity(normalizedText, entry.text.toLowerCase().trim());
+      if (similarity >= DEDUPE_SIMILARITY_THRESHOLD) {
+        console.log(`🔇 [DEDUPE] Filtered mic echo: "${text}" (similar to speaker: "${entry.text}", similarity: ${(similarity * 100).toFixed(0)}%)`);
+        // Remove any interim for mic since we're filtering this
+        const existingInterim = chatMessages.querySelector(`.interim[data-source="microphone"]`);
+        if (existingInterim) existingInterim.remove();
+        return; // Don't display - it's echo
+      }
+    }
+  }
+
+  // Track speaker transcripts for deduplication
+  if (source === "speaker" && isFinal && text.trim()) {
+    recentSpeakerTexts.push({ text: text, time: now });
+  }
+
   // Remove empty state if exists
   const emptyState = chatMessages.querySelector(".empty-state");
   if (emptyState) {
@@ -523,6 +557,20 @@ function displayTranscript(text, isFinal, source, eventData = null) {
     
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
+}
+
+// Calculate text similarity (Jaccard similarity on words)
+function calculateSimilarity(text1, text2) {
+  const words1 = new Set(text1.split(/\s+/).filter(w => w.length > 0));
+  const words2 = new Set(text2.split(/\s+/).filter(w => w.length > 0));
+  
+  if (words1.size === 0 && words2.size === 0) return 1;
+  if (words1.size === 0 || words2.size === 0) return 0;
+  
+  const intersection = new Set([...words1].filter(w => words2.has(w)));
+  const union = new Set([...words1, ...words2]);
+  
+  return intersection.size / union.size;
 }
 
 // Helper to escape HTML

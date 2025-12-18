@@ -19,15 +19,10 @@ class AudioCapture {
     this.workerInitialized = false;
     this.pendingAudioBuffer = [];
 
-    // Echo suppression state - ENABLED to prevent mic from picking up speaker audio
-    // This is critical when not using headphones
+    // Echo suppression is DISABLED - we rely on browser's built-in AEC instead
+    // The native speaker capture bypasses this class, so we can't track speaker energy here
     this.speakerAudioEnergy = 0;
-    this.speakerEnergyDecay = 0.92; // Slower decay for better tracking
-    this.echoSuppressionEnabled = true; // ENABLED for no-headphone use
-    this.echoThreshold = 0.003; // Very low threshold to detect any speaker audio
-    this.echoSuppressionGain = 0.0; // Fully mute mic when speaker is playing
-    this.lastSpeakerAudioTime = 0;
-    this.echoHoldTime = 300; // Hold suppression for 300ms after speaker stops
+    this.echoSuppressionEnabled = false; // DISABLED - doesn't work with native capture
   }
 
   // Set microphone mute state
@@ -187,28 +182,8 @@ class AudioCapture {
             chunkCount++;
           }
 
-          // Echo suppression: mute mic when speaker is playing to avoid picking up speaker audio
-          // This is essential when not using headphones
-          if (this.echoSuppressionEnabled) {
-            const now = Date.now();
-            const timeSinceSpeaker = now - this.lastSpeakerAudioTime;
-            const speakerActive = this.speakerAudioEnergy > this.echoThreshold || timeSinceSpeaker < this.echoHoldTime;
-
-            if (speakerActive) {
-              // Mute the microphone while speaker is playing
-              // This prevents the mic from picking up and re-transcribing speaker audio
-              const suppressedData = new Float32Array(inputData.length);
-              suppressedData.fill(0); // Complete silence
-              inputData = suppressedData;
-              
-              // Log occasionally
-              if (chunkCount % 100 === 0) {
-                console.log(`🔇 [Echo] Mic muted (speaker energy: ${this.speakerAudioEnergy.toFixed(4)}, time since: ${timeSinceSpeaker}ms)`);
-              }
-            }
-          }
-
-          // Skip RNNoise worker processing for now - rely on browser noise suppression
+          // Rely on browser's built-in echo cancellation (echoCancellation: true in getUserMedia)
+          // Custom echo suppression is disabled because native speaker capture bypasses this class
           // This avoids latency issues from the async worker pipeline
           // Browser's noiseSuppression: true provides good baseline noise reduction
 
