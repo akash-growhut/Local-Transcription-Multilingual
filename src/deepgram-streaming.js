@@ -72,6 +72,12 @@ function createDeepgramConnection(config) {
     sample_rate: sampleRate.toString(),
     channels: channels.toString(),
     interim_results: interimResults.toString(),
+
+    // 🔥 CRITICAL: Endpointing for low latency
+    endpointing: "200", // Finalize after 200ms silence
+    utterance_end_ms: "1000", // Sentence boundary detection
+    vad_events: "true", // Real-time speech activity events
+
     punctuate: punctuate.toString(),
     smart_format: smartFormat.toString(),
     diarize: diarize.toString(),

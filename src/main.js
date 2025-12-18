@@ -234,6 +234,10 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
 
         let audioSampleCount = 0;
 
+        // 🔥 Frame slicing for 20ms chunks
+        const FRAME_SIZE = 320; // 20ms @ 16kHz
+        let leftover = new Float32Array(0);
+
         console.log("🎙️ Creating new native audio capture instance...");
         nativeAudioCapture = new NativeAudioCapture((audioBuffer) => {
           // audioBuffer is a Node Buffer of float32 PCM from native
@@ -247,36 +251,41 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
             byteLength / 4
           );
 
-          // Calculate RMS for audio validation
-          let sumSquares = 0;
-          for (let i = 0; i < floatData.length; i++) {
-            sumSquares += floatData[i] * floatData[i];
-          }
-          const rms = Math.sqrt(sumSquares / floatData.length) || 0;
+          // 🔥 Concatenate leftover + new data
+          const merged = new Float32Array(leftover.length + floatData.length);
+          merged.set(leftover);
+          merged.set(floatData, leftover.length);
 
-          // Log first few samples for debugging
-          if (audioSampleCount < 3) {
-            console.log(
-              `📊 Audio sample ${audioSampleCount}: ${
-                floatData.length
-              } samples, rms≈${rms.toFixed(4)}`
-            );
-            audioSampleCount++;
-          }
+          // 🔥 Send in 20ms frames (320 samples @ 16kHz)
+          let offset = 0;
+          while (offset + FRAME_SIZE <= merged.length) {
+            const frame = merged.slice(offset, offset + FRAME_SIZE);
 
-          // Send to Deepgram WebSocket (will automatically convert Float32 to Int16)
-          if (speakerConnection && speakerConnection.isReady()) {
-            // Only send if there's actual audio (basic silence detection)
-            const RMS_THRESHOLD = 0.001; // Very low threshold for Float32
-            if (rms > RMS_THRESHOLD) {
-              speakerConnection.send(floatData);
+            // Log first few frames for debugging
+            if (audioSampleCount < 3) {
+              console.log(
+                `📊 Audio frame ${audioSampleCount}: ${
+                  frame.length
+                } samples (${((frame.length / 16000) * 1000).toFixed(1)}ms)`
+              );
+              audioSampleCount++;
             }
+
+            // ✅ ALWAYS send audio (including silence) - Deepgram needs it for endpointing
+            if (speakerConnection && speakerConnection.isReady()) {
+              speakerConnection.send(frame);
+            }
+
+            offset += FRAME_SIZE;
           }
+
+          // Save leftover samples for next callback
+          leftover = merged.slice(offset);
         });
 
         const result = nativeAudioCapture.start();
         if (result.success) {
-          console.log("✅ Native macOS audio capture started");
+          console.log("✅ Native macOS audio capture started (20ms frames)");
           mainWindow.webContents.send("native-audio-started", true);
         } else {
           console.log("⚠️ Native audio capture failed");
@@ -354,6 +363,8 @@ ipcMain.handle(
             buffer.byteOffset,
             buffer.length / 2
           );
+
+          // ✅ ALWAYS send audio (including silence) - Deepgram needs it for endpointing
           speakerConnection.send(int16Array);
         }
         return { success: true };
@@ -386,18 +397,8 @@ ipcMain.handle(
             buffer.length / 2
           );
 
-          // Simple silence detection (optional)
-          let sumSquares = 0;
-          for (let i = 0; i < int16Array.length; i++) {
-            sumSquares += int16Array[i] * int16Array[i];
-          }
-          const rms = Math.sqrt(sumSquares / int16Array.length);
-
-          // Send audio continuously (even if quiet, let Deepgram handle it)
-          const RMS_THRESHOLD = 10;
-          if (rms > RMS_THRESHOLD) {
-            microphoneConnection.send(int16Array);
-          }
+          // ✅ ALWAYS send audio (including silence) - Deepgram needs it for endpointing
+          microphoneConnection.send(int16Array);
         }
         return { success: true };
       }
