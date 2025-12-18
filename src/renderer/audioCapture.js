@@ -19,16 +19,33 @@ class AudioCapture {
     this.workerInitialized = false;
     this.pendingAudioBuffer = [];
 
-    // Echo suppression is DISABLED - we rely on browser's built-in AEC instead
-    // The native speaker capture bypasses this class, so we can't track speaker energy here
+    // Echo suppression - uses speaker energy from native capture (sent via IPC)
     this.speakerAudioEnergy = 0;
-    this.echoSuppressionEnabled = false; // DISABLED - doesn't work with native capture
+    this.speakerEnergyDecay = 0.85; // Decay factor
+    this.echoSuppressionEnabled = true; // ENABLED - now works with native capture via IPC
+    this.echoThreshold = 0.01; // Threshold for speaker activity detection
+    this.lastSpeakerAudioTime = 0;
+    this.echoHoldTime = 400; // Hold suppression for 400ms after speaker stops
   }
 
   // Set microphone mute state
   setMicrophoneMuted(muted) {
     this.isMicrophoneMuted = muted;
     console.log(`Microphone ${muted ? "muted" : "unmuted"} in AudioCapture`);
+  }
+
+  // Update speaker audio energy from native capture (called via IPC)
+  updateSpeakerEnergy(rms) {
+    // Update speaker energy with exponential moving average
+    this.speakerAudioEnergy = Math.max(
+      this.speakerAudioEnergy * this.speakerEnergyDecay,
+      rms
+    );
+    
+    // Track when speaker was last active
+    if (rms > this.echoThreshold) {
+      this.lastSpeakerAudioTime = Date.now();
+    }
   }
 
   // Start microphone capture
@@ -182,10 +199,19 @@ class AudioCapture {
             chunkCount++;
           }
 
-          // Rely on browser's built-in echo cancellation (echoCancellation: true in getUserMedia)
-          // Custom echo suppression is disabled because native speaker capture bypasses this class
-          // This avoids latency issues from the async worker pipeline
-          // Browser's noiseSuppression: true provides good baseline noise reduction
+          // Echo suppression: mute mic when speaker is playing (detected via IPC from native capture)
+          if (this.echoSuppressionEnabled) {
+            const now = Date.now();
+            const timeSinceSpeaker = now - this.lastSpeakerAudioTime;
+            const speakerActive = this.speakerAudioEnergy > this.echoThreshold || timeSinceSpeaker < this.echoHoldTime;
+
+            if (speakerActive) {
+              // Mute the microphone while speaker is playing
+              const suppressedData = new Float32Array(inputData.length);
+              suppressedData.fill(0); // Complete silence
+              inputData = suppressedData;
+            }
+          }
 
           // Convert Float32Array to Int16Array for Deepgram (no resampling!)
           const int16Data = this.floatTo16BitPCM(inputData);

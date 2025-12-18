@@ -275,6 +275,12 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
             audioSampleCount++;
           }
 
+          // Send speaker audio energy to renderer for echo suppression
+          // This allows the mic to know when speaker is playing
+          if (mainWindow && !mainWindow.isDestroyed() && rms > 0.001) {
+            mainWindow.webContents.send("speaker-audio-energy", rms);
+          }
+
           // Send to Deepgram WebSocket (will automatically convert Float32 to Int16)
           if (speakerConnection && speakerConnection.isReady()) {
             // Only send if there's actual audio (basic silence detection)

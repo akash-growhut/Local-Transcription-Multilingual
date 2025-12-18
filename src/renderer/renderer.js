@@ -84,6 +84,13 @@ function setupEventListeners() {
     console.error("Speaker error:", error);
   });
 
+  // Listen for speaker audio energy (for echo suppression when not using headphones)
+  window.electronAPI.onSpeakerAudioEnergy((rms) => {
+    if (audioCapture) {
+      audioCapture.updateSpeakerEnergy(rms);
+    }
+  });
+
   // NOTE: onTranscript listener already registered above (line 47-50), removing duplicate
 
   // Listen for audio capture warnings
