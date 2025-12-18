@@ -244,6 +244,8 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
         }
 
         let audioSampleCount = 0;
+        let pendingAudioBuffers = []; // Buffer audio until connection is ready
+        let connectionReadyLogged = false;
 
         console.log("🎙️ Creating new native audio capture instance...");
         nativeAudioCapture = new NativeAudioCapture((audioBuffer) => {
@@ -265,28 +267,42 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
           }
           const rms = Math.sqrt(sumSquares / floatData.length) || 0;
 
-          // Log first few samples for debugging
-          if (audioSampleCount < 3) {
+          // Log samples with actual audio (not just first 3)
+          if (audioSampleCount < 5 || (rms > 0.01 && audioSampleCount < 20)) {
             console.log(
-              `📊 Audio sample ${audioSampleCount}: ${
-                floatData.length
-              } samples, rms≈${rms.toFixed(4)}`
+              `📊 Audio sample ${audioSampleCount}: ${floatData.length} samples, rms≈${rms.toFixed(4)}`
             );
             audioSampleCount++;
           }
 
           // Send speaker audio energy to renderer for echo suppression
-          // This allows the mic to know when speaker is playing
-          // Always send energy (even if low) so the renderer can track speaker activity
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send("speaker-audio-energy", rms);
           }
 
-          // Send to Deepgram WebSocket (will automatically convert Float32 to Int16)
-          if (speakerConnection && speakerConnection.isReady()) {
-            // Only send if there's actual audio (basic silence detection)
-            speakerConnection.send(floatData);
+          // Buffer audio if connection not ready yet
+          if (!speakerConnection || !speakerConnection.isReady()) {
+            // Keep up to 2 seconds of audio buffered (16000 samples/sec * 2 = 32000 samples)
+            if (pendingAudioBuffers.length < 100) {
+              pendingAudioBuffers.push(floatData.slice()); // Copy the data
+            }
+            return;
           }
+
+          // Flush buffered audio when connection becomes ready
+          if (pendingAudioBuffers.length > 0) {
+            if (!connectionReadyLogged) {
+              console.log(`📤 Flushing ${pendingAudioBuffers.length} buffered audio chunks to Deepgram`);
+              connectionReadyLogged = true;
+            }
+            for (const bufferedData of pendingAudioBuffers) {
+              speakerConnection.send(bufferedData);
+            }
+            pendingAudioBuffers = [];
+          }
+
+          // Send current audio to Deepgram
+          speakerConnection.send(floatData);
         });
 
         const result = nativeAudioCapture.start();
