@@ -131,7 +131,9 @@ function updateStatus(elementId, text, className) {
 }
 
 function saveApiKey() {
-  const apiKey = document.getElementById("apiKey").value.trim();
+  const apiKeyInput = document.getElementById("apiKey");
+  const apiKey = apiKeyInput.value.trim();
+  
   if (!apiKey) {
     alert("Please enter a Deepgram API key");
     return;
@@ -143,21 +145,65 @@ function saveApiKey() {
   // Initialize Deepgram
   window.electronAPI.initializeDeepgram(apiKey).then((result) => {
     if (result.success) {
-      alert("API key saved and Deepgram initialized successfully!");
-      document.getElementById("apiKey").value = "";
+      // Show masked key to indicate it's saved
+      apiKeyInput.value = maskApiKey(apiKey);
+      apiKeyInput.setAttribute("data-saved", "true");
+      console.log("✅ API key saved and Deepgram initialized");
     } else {
       alert(`Error initializing Deepgram: ${result.error}`);
     }
   });
 }
 
+function maskApiKey(key) {
+  if (!key || key.length < 8) return key;
+  return key.substring(0, 4) + "..." + key.substring(key.length - 4);
+}
+
 function loadSavedApiKey() {
   const savedKey = localStorage.getItem("deepgramApiKey");
+  const apiKeyInput = document.getElementById("apiKey");
+  
   if (savedKey) {
     deepgramApiKey = savedKey;
-    window.electronAPI.initializeDeepgram(savedKey);
+    // Show masked version in input
+    apiKeyInput.value = maskApiKey(savedKey);
+    apiKeyInput.setAttribute("data-saved", "true");
+    
+    // Initialize Deepgram automatically
+    window.electronAPI.initializeDeepgram(savedKey).then((result) => {
+      if (result.success) {
+        console.log("✅ Deepgram initialized with saved API key");
+      } else {
+        console.error("Failed to initialize Deepgram:", result.error);
+        // Clear the saved key if it's invalid
+        apiKeyInput.value = "";
+        apiKeyInput.removeAttribute("data-saved");
+      }
+    });
   }
 }
+
+// Clear masked key when user focuses on input to enter a new key
+document.addEventListener("DOMContentLoaded", () => {
+  const apiKeyInput = document.getElementById("apiKey");
+  if (apiKeyInput) {
+    apiKeyInput.addEventListener("focus", () => {
+      if (apiKeyInput.getAttribute("data-saved") === "true") {
+        apiKeyInput.value = "";
+        apiKeyInput.removeAttribute("data-saved");
+      }
+    });
+    
+    // If user clicks away without entering anything, restore masked key
+    apiKeyInput.addEventListener("blur", () => {
+      if (apiKeyInput.value === "" && deepgramApiKey) {
+        apiKeyInput.value = maskApiKey(deepgramApiKey);
+        apiKeyInput.setAttribute("data-saved", "true");
+      }
+    });
+  }
+});
 
 // Unified start function - starts both microphone and speaker
 async function startAll() {
