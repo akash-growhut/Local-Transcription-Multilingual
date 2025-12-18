@@ -125,8 +125,12 @@ function createDeepgramConnection(config) {
   });
 
   ws.on("error", (err) => {
-    console.error("❌ Deepgram WebSocket error:", err.message);
-    if (onError) onError(err);
+    let errorMessage = err.message;
+    if (err.message.includes("401")) {
+      errorMessage = "Invalid API key. Please check your Deepgram API key and try again.";
+    }
+    console.error("❌ Deepgram WebSocket error:", errorMessage);
+    if (onError) onError(new Error(errorMessage));
   });
 
   ws.on("close", () => {

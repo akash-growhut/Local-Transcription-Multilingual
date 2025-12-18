@@ -9,8 +9,8 @@ let isMicrophoneMuted = false;
 // Deduplication: Track recent speaker transcripts to filter echo from mic
 // When not using headphones, mic picks up speaker audio - we filter it out
 const recentSpeakerTexts = [];
-const DEDUPE_WINDOW_MS = 3000; // 3 second window for deduplication
-const DEDUPE_SIMILARITY_THRESHOLD = 0.6; // 60% similarity = likely echo
+const DEDUPE_WINDOW_MS = 2000; // 2 second window for deduplication
+const DEDUPE_SIMILARITY_THRESHOLD = 0.85; // 85% similarity = very likely echo (less aggressive)
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", () => {
@@ -207,8 +207,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Unified start function - starts both microphone and speaker
 async function startAll() {
-  if (!deepgramApiKey) {
-    alert("Please enter and save your Deepgram API key first");
+  if (!deepgramApiKey || deepgramApiKey.length < 10) {
+    alert("Please enter your Deepgram API key and click the Save button first.\n\nThe API key should look like: 0107cf2f62345e007fbaf64e27bd7f4923c6a735");
+    document.getElementById("apiKey").focus();
     return;
   }
 
@@ -218,9 +219,23 @@ async function startAll() {
   // Reset mute state
   isMicrophoneMuted = false;
 
-  // Clear chat messages
+  // Keep previous chat messages - only remove empty state if exists
   const chatMessages = document.getElementById("chatMessages");
-  if (chatMessages) chatMessages.innerHTML = "";
+  if (chatMessages) {
+    const emptyState = chatMessages.querySelector(".empty-state");
+    if (emptyState) emptyState.remove();
+    
+    // Remove any interim messages from previous session
+    chatMessages.querySelectorAll(".interim").forEach(el => el.remove());
+    
+    // Add separator if there are existing messages
+    if (chatMessages.children.length > 0) {
+      const separator = document.createElement("div");
+      separator.className = "session-separator";
+      separator.innerHTML = `<span>New Session - ${new Date().toLocaleTimeString()}</span>`;
+      chatMessages.appendChild(separator);
+    }
+  }
 
   try {
     // Disable start button, enable stop and mute buttons
@@ -575,11 +590,14 @@ function displayTranscript(text, isFinal, source, eventData = null) {
       existingInterim.remove();
     }
 
-    // Create final message
+    // Create final message with unique ID for tracking
     const messageDiv = document.createElement("div");
-    messageDiv.className = `message ${messageClass}`;
+    messageDiv.className = `message ${messageClass} final-message`;
+    messageDiv.setAttribute("data-timestamp", Date.now());
     messageDiv.innerHTML = `<span class="final">${escapeHtml(text)}</span>`;
     chatMessages.appendChild(messageDiv);
+    
+    console.log(`💬 [UI] Added FINAL ${source}: "${text}"`);
 
     // Scroll to bottom
     chatMessages.scrollTop = chatMessages.scrollHeight;

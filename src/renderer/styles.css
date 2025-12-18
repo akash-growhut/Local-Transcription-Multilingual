@@ -625,6 +625,30 @@ input:focus {
   height: 10px;
 }
 
+/* Session separator between recordings */
+.session-separator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: var(--space-4) 0;
+  position: relative;
+}
+
+.session-separator::before,
+.session-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-default);
+}
+
+.session-separator span {
+  padding: 0 var(--space-3);
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
 /* Scrollbar - Global Dark Style */
 ::-webkit-scrollbar {
   width: 8px;
