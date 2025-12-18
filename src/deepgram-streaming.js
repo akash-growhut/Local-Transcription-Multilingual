@@ -65,7 +65,7 @@ function createDeepgramConnection(config) {
   }
 
   // Build WebSocket URL with query parameters
-  // Add endpointing and VAD settings for reliable final transcripts
+  // Simplified settings for reliable transcription
   const params = new URLSearchParams({
     model,
     language,
@@ -75,21 +75,17 @@ function createDeepgramConnection(config) {
     interim_results: interimResults.toString(),
     punctuate: punctuate.toString(),
     smart_format: smartFormat.toString(),
-    diarize: diarize.toString(),
-    // Endpointing settings - critical for getting final transcripts
-    endpointing: "300", // Finalize after 300ms of silence (faster response)
-    utterance_end_ms: "1000", // Consider utterance ended after 1s silence
-    vad_events: "true", // Enable VAD events for better speech detection
+    // Endpointing - finalize after brief silence
+    endpointing: "400",
+    // VAD events for speech detection
+    vad_events: "true",
   });
 
   const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
 
   console.log(`📡 Creating Deepgram WebSocket connection:`);
-  console.log(`   Model: ${model}`);
-  console.log(`   Language: ${language}`);
-  console.log(`   Sample Rate: ${sampleRate}Hz`);
-  console.log(`   Channels: ${channels}`);
-  console.log(`   Interim Results: ${interimResults}`);
+  console.log(`   URL: ${wsUrl}`);
+  console.log(`   Model: ${model}, Language: ${language}, Sample Rate: ${sampleRate}Hz`);
 
   // Create WebSocket connection
   const ws = new WebSocket(wsUrl, {

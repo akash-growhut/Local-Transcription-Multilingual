@@ -19,14 +19,15 @@ class AudioCapture {
     this.workerInitialized = false;
     this.pendingAudioBuffer = [];
 
-    // Echo cancellation state
+    // Echo cancellation state - DISABLED by default since browser AEC is better
+    // Only enable manually if you notice echo issues without headphones
     this.speakerAudioEnergy = 0;
     this.speakerEnergyDecay = 0.95; // Decay factor for speaker energy tracking
-    this.echoSuppressionEnabled = true;
-    this.echoThreshold = 0.02; // Minimum speaker energy to trigger suppression
-    this.echoSuppressionGain = 0.3; // Reduce mic volume when echo detected
+    this.echoSuppressionEnabled = false; // DISABLED - browser AEC handles this better
+    this.echoThreshold = 0.05; // Higher threshold - only trigger on loud speaker audio
+    this.echoSuppressionGain = 0.7; // Less aggressive - keep 70% of mic volume
     this.lastSpeakerAudioTime = 0;
-    this.echoHoldTime = 150; // Hold echo suppression for 150ms after speaker stops
+    this.echoHoldTime = 50; // Shorter hold time
   }
 
   // Set microphone mute state
@@ -186,59 +187,27 @@ class AudioCapture {
             chunkCount++;
           }
 
-          // Echo suppression: reduce mic input when speaker is playing
-          // This prevents speaker audio from being picked up as "you speaking"
-          if (this.echoSuppressionEnabled) {
+          // Optional echo suppression: only applies if manually enabled
+          // Browser's built-in AEC (echoCancellation: true) handles most cases
+          if (this.echoSuppressionEnabled && this.speakerAudioEnergy > this.echoThreshold) {
             const now = Date.now();
             const timeSinceSpeaker = now - this.lastSpeakerAudioTime;
 
-            // Check if speaker was recently active
-            if (
-              this.speakerAudioEnergy > this.echoThreshold ||
-              timeSinceSpeaker < this.echoHoldTime
-            ) {
-              // Apply echo suppression - reduce gain when speaker is active
+            // Only suppress if speaker audio is actively playing
+            if (timeSinceSpeaker < this.echoHoldTime) {
+              // Apply gentle echo suppression
               const suppressionFactor = this.echoSuppressionGain;
-
-              // Create a copy to avoid modifying the original buffer
               const suppressedData = new Float32Array(inputData.length);
               for (let i = 0; i < inputData.length; i++) {
                 suppressedData[i] = inputData[i] * suppressionFactor;
               }
               inputData = suppressedData;
-
-              // Log occasional echo suppression events
-              if (chunkCount % 50 === 0) {
-                console.log(
-                  `🔇 [Echo] Suppressing mic input (speaker energy: ${this.speakerAudioEnergy.toFixed(
-                    4
-                  )})`
-                );
-              }
             }
           }
 
-          // Process through RNNoise Web Worker if available
-          // Send every chunk to worker (no skipping)
-          if (
-            this.workerInitialized &&
-            this.rnnoiseEnabled &&
-            this.audioWorker
-          ) {
-            // Send to worker for processing (non-blocking)
-            this.audioWorker.postMessage({
-              type: "process",
-              data: {
-                audioData: Array.from(inputData),
-                timestamp: Date.now(),
-              },
-            });
-
-            // Use processed audio from queue if available
-            if (this.processedAudioQueue && this.processedAudioQueue.length > 0) {
-              inputData = this.processedAudioQueue.shift();
-            }
-          }
+          // Skip RNNoise worker processing for now - rely on browser noise suppression
+          // This avoids latency issues from the async worker pipeline
+          // Browser's noiseSuppression: true provides good baseline noise reduction
 
           // Convert Float32Array to Int16Array for Deepgram (no resampling!)
           const int16Data = this.floatTo16BitPCM(inputData);
