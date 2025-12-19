@@ -411,9 +411,9 @@ void AudioCaptureAddon::StartCaptureAsync() {
                             // Create stream configuration
                             SCStreamConfiguration* config = [[SCStreamConfiguration alloc] init];
                             config.capturesAudio = YES;
-                            config.sampleRate = 16000;
+                            config.sampleRate = 48000;
                             config.channelCount = 1;
-                            NSLog(@"⚙️ Stream config: audio=YES, sampleRate=16000, channels=1");
+                            NSLog(@"⚙️ Stream config: audio=YES, sampleRate=48000, channels=1");
                             
                             // Create output handler with weak reference check
                             StreamOutputHandler* handler = [[StreamOutputHandler alloc] init];

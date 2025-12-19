@@ -197,26 +197,46 @@ async function startAll() {
 
     // Start speaker
     updateStatus("speakerStatus", "Starting...", "recording");
-    const speakerResult = await window.electronAPI.startSpeakerCapture(
-      deepgramApiKey
-    );
-    if (!speakerResult.success) {
-      console.error(`Error starting speaker: ${speakerResult.error}`);
-      updateStatus("speakerStatus", "Error", "error");
+
+    // Check if we're in Electron (native capture) or browser (fallback)
+    const isElectron = typeof window !== "undefined" && window.electronAPI;
+
+    if (isElectron) {
+      // In Electron: Use native audio capture module (speaker_audio_capture.mm)
+      // This uses macOS ScreenCaptureKit for automatic system audio capture
+      // No user interaction required - direct OS-level access
+      const speakerResult = await window.electronAPI.startSpeakerCapture(
+        deepgramApiKey
+      );
+      if (!speakerResult.success) {
+        console.error(`Error starting speaker: ${speakerResult.error}`);
+        updateStatus("speakerStatus", "Error", "error");
+      } else {
+        // Native capture is handled entirely in main process
+        // Audio flows: ScreenCaptureKit → native module → main.js → Deepgram
+        // Status will be updated via onSpeakerConnected event when WebSocket is ready
+        console.log(
+          "✅ Native speaker capture started in Electron (using speaker_audio_capture.mm)"
+        );
+      }
     } else {
+      // In browser: Use browser-based fallback (getDisplayMedia API)
+      // This requires user interaction to select audio source in sharing dialog
+      // Fallback path for when running in actual browser (not Electron)
       const audioResult = await audioCapture.startSpeakerCapture(
         (audioData, source) => {
-          window.electronAPI.sendAudioData(audioData, source);
+          // In browser, audio would need to be sent to a different endpoint
+          // This is the fallback path for non-Electron environments
+          console.log("Browser-based speaker capture (fallback mode)");
         }
       );
       if (audioResult.success) {
         updateStatus("speakerStatus", "Recording", "recording");
       } else {
-        // Show error message but don't stop everything
         showError(
           `Speaker capture may not work:\n\n${audioResult.error}\n\n` +
             `Make sure to:\n` +
-            `1. Grant screen recording permission (macOS)\n` +
+            `1. Grant screen recording permission\n` +
             `2. Select an audio source in the sharing dialog\n` +
             `3. Check "Share audio" or "Share system audio"\n\n` +
             `Microphone will continue working.`

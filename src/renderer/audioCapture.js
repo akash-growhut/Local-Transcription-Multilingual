@@ -366,7 +366,7 @@ class AudioCapture {
       }
 
       this.speakerStream = stream;
-      this.speakerContext = new AudioContext({ sampleRate: 16000 });
+      this.speakerContext = new AudioContext({ sampleRate: 48000 });
       const source = this.speakerContext.createMediaStreamSource(stream);
 
       // Track audio levels to detect if audio is actually flowing

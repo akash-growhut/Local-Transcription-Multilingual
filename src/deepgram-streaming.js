@@ -31,7 +31,7 @@ function floatTo16BitPCM(float32Array) {
  * @param {string} config.apiKey - Deepgram API key
  * @param {string} config.language - Language code (default: "multi")
  * @param {string} config.model - Model name (default: "nova-2")
- * @param {number} config.sampleRate - Sample rate in Hz (default: 16000)
+ * @param {number} config.sampleRate - Sample rate in Hz (default: 48000)
  * @param {number} config.channels - Number of channels (default: 1)
  * @param {boolean} config.interimResults - Enable interim results (default: true)
  * @param {boolean} config.punctuate - Enable punctuation (default: true)
@@ -48,7 +48,7 @@ function createDeepgramConnection(config) {
     apiKey,
     language = "multi",
     model = "nova-2",
-    sampleRate = 16000,
+    sampleRate = 48000,
     channels = 1,
     interimResults = true,
     punctuate = true,
@@ -139,7 +139,7 @@ function createDeepgramConnection(config) {
         if (onTranscript) onTranscript(transcript, true, words);
       } else {
         // ⚠️ INTERIM (do not persist)
-        console.log(`📝 INTERIM (${type}): "${transcript}"`);
+        // console.log(`📝 INTERIM (${type}): "${transcript}"`);
         if (onTranscript) onTranscript(transcript, false, words);
       }
     } catch (error) {
