@@ -69,6 +69,7 @@ function createMicrophoneConnection(apiKey, sampleRate = 16000) {
     punctuate: true,
     smartFormat: true,
     diarize: true,
+    type: "microphone",
     onTranscript: (transcript, isFinal, words) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("transcript", {
@@ -121,7 +122,8 @@ function createSpeakerConnection(apiKey) {
     interimResults: true,
     punctuate: true,
     smartFormat: true,
-    diarize: true,
+    diarize: false,
+    type: "speaker",
     onTranscript: (transcript, isFinal, words) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("transcript", {

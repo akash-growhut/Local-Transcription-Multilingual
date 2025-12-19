@@ -58,6 +58,7 @@ function createDeepgramConnection(config) {
     onError,
     onOpen,
     onClose,
+    type,
   } = config;
 
   if (!apiKey) {
@@ -133,12 +134,12 @@ function createDeepgramConnection(config) {
 
       if (isFinal) {
         // ✅ COMMIT FINAL TEXT
-        console.log(`💬 FINAL: "${transcript}"`);
+        console.log(`💬 FINAL (${type}): "${transcript}"`);
         lastFinalTranscript += transcript + " ";
         if (onTranscript) onTranscript(transcript, true, words);
       } else {
         // ⚠️ INTERIM (do not persist)
-        console.log(`📝 INTERIM: "${transcript}"`);
+        console.log(`📝 INTERIM (${type}): "${transcript}"`);
         if (onTranscript) onTranscript(transcript, false, words);
       }
     } catch (error) {
