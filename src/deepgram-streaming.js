@@ -30,7 +30,7 @@ function floatTo16BitPCM(float32Array) {
  * @param {Object} config - Configuration object
  * @param {string} config.apiKey - Deepgram API key
  * @param {string} config.language - Language code (default: "multi")
- * @param {string} config.model - Model name (default: "nova-2")
+ * @param {string} config.model - Model name (default: "nova-3")
  * @param {number} config.sampleRate - Sample rate in Hz (default: 48000)
  * @param {number} config.channels - Number of channels (default: 1)
  * @param {boolean} config.interimResults - Enable interim results (default: true)
@@ -47,7 +47,7 @@ function createDeepgramConnection(config) {
   const {
     apiKey,
     language = "multi",
-    model = "nova-2",
+    model = "nova-3",
     sampleRate = 48000,
     channels = 1,
     interimResults = true,

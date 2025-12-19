@@ -63,7 +63,7 @@ function createMicrophoneConnection(apiKey, sampleRate = 48000) {
   microphoneConnection = createDeepgramConnection({
     apiKey,
     language: "multi",
-    model: "nova-2",
+    model: "nova-3",
     sampleRate,
     channels: 1,
     interimResults: true,
@@ -117,7 +117,7 @@ function createSpeakerConnection(apiKey) {
   speakerConnection = createDeepgramConnection({
     apiKey,
     language: "multi",
-    model: "nova-2",
+    model: "nova-3",
     sampleRate: 48000,
     channels: 1,
     interimResults: true,
