@@ -10,6 +10,10 @@ const { createDeepgramConnection } = require("./deepgram-streaming");
 let NativeAudioCapture = null;
 let nativeAudioCapture = null;
 
+// Try to load AEC-enabled audio capture module (macOS only)
+let AudioCaptureWithAEC = null;
+let audioCaptureWithAEC = null;
+
 if (process.platform === "darwin") {
   try {
     NativeAudioCapture = require("../native-audio/index.js");
@@ -17,6 +21,17 @@ if (process.platform === "darwin") {
   } catch (error) {
     console.log("⚠️ Native audio capture not available:", error.message);
     console.log("   Falling back to web API method");
+  }
+
+  try {
+    AudioCaptureWithAEC = require("../native-audio/audio-capture-aec.js");
+    console.log("✅ Native audio capture with AEC module loaded");
+  } catch (error) {
+    console.log(
+      "⚠️ Native audio capture with AEC not available:",
+      error.message
+    );
+    console.log("   Echo cancellation will use browser fallback");
   }
 }
 
@@ -209,6 +224,144 @@ ipcMain.handle("start-microphone-capture", async (event, apiKey) => {
   }
 });
 
+// New unified handler for AEC-enabled capture (both speaker and microphone)
+ipcMain.handle("start-aec-capture", async (event, apiKey) => {
+  try {
+    // Initialize Deepgram client
+    if (!deepgramClient) {
+      deepgramClient = initializeDeepgram(apiKey);
+    }
+
+    // Create WebSocket connections for both streams
+    createSpeakerConnection(apiKey);
+    createMicrophoneConnection(apiKey, 48000); // AEC uses fixed 48kHz
+
+    // Try to start AEC-enabled native capture if available (macOS)
+    if (AudioCaptureWithAEC && process.platform === "darwin") {
+      try {
+        // Clean up existing instance if any
+        if (audioCaptureWithAEC) {
+          console.log("⚠️ Cleaning up existing AEC capture instance...");
+          try {
+            audioCaptureWithAEC.stop();
+          } catch (e) {
+            console.log("⚠️ Error stopping existing instance:", e.message);
+          }
+          audioCaptureWithAEC = null;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        console.log("🎙️ Creating new AEC-enabled audio capture instance...");
+        audioCaptureWithAEC = new AudioCaptureWithAEC();
+
+        // Speaker callback - send to Deepgram
+        const speakerCallback = (audioBuffer) => {
+          const byteOffset = audioBuffer.byteOffset || 0;
+          const byteLength =
+            audioBuffer.byteLength - (audioBuffer.byteLength % 4);
+          const floatData = new Float32Array(
+            audioBuffer.buffer,
+            byteOffset,
+            byteLength / 4
+          );
+
+          // Apply gain normalization (same as before)
+          const normalizedData = new Float32Array(floatData.length);
+          let sumSquares = 0;
+          for (let i = 0; i < floatData.length; i++) {
+            sumSquares += floatData[i] * floatData[i];
+          }
+          const rms = Math.sqrt(sumSquares / floatData.length) || 0;
+          let peak = 0;
+          for (let i = 0; i < floatData.length; i++) {
+            const absValue = Math.abs(floatData[i]);
+            if (absValue > peak) peak = absValue;
+          }
+
+          let gainMultiplier = 1.0;
+          if (rms > 0 && rms < 0.03) {
+            gainMultiplier = 2.0;
+          } else if (rms < 0.08) {
+            gainMultiplier = 1.8;
+          } else if (rms < 0.15) {
+            gainMultiplier = 1.3;
+          }
+
+          const maxSafeGain =
+            peak > 0 ? Math.min(gainMultiplier, 0.95 / peak) : gainMultiplier;
+
+          for (let i = 0; i < floatData.length; i++) {
+            normalizedData[i] = Math.max(
+              -1,
+              Math.min(1, floatData[i] * maxSafeGain)
+            );
+          }
+
+          // Send to Deepgram
+          if (speakerConnection && speakerConnection.isReady()) {
+            speakerConnection.send(normalizedData);
+          } else {
+            if (speakerAudioBuffer.length < 50) {
+              speakerAudioBuffer.push(normalizedData);
+            } else {
+              speakerAudioBuffer.shift();
+              speakerAudioBuffer.push(normalizedData);
+            }
+          }
+        };
+
+        // Microphone callback - AEC-processed audio, send to Deepgram
+        const microphoneCallback = (audioBuffer) => {
+          const byteOffset = audioBuffer.byteOffset || 0;
+          const byteLength =
+            audioBuffer.byteLength - (audioBuffer.byteLength % 4);
+          const floatData = new Float32Array(
+            audioBuffer.buffer,
+            byteOffset,
+            byteLength / 4
+          );
+
+          // Convert to Int16Array for Deepgram
+          const int16Data = new Int16Array(floatData.length);
+          for (let i = 0; i < floatData.length; i++) {
+            const s = Math.max(-1, Math.min(1, floatData[i]));
+            int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          }
+
+          // Send AEC-processed microphone audio to Deepgram
+          if (microphoneConnection && microphoneConnection.isReady()) {
+            microphoneConnection.send(int16Data);
+          }
+        };
+
+        const result = audioCaptureWithAEC.start(
+          speakerCallback,
+          microphoneCallback
+        );
+        if (result.success) {
+          console.log("✅ AEC-enabled native audio capture started");
+          mainWindow.webContents.send("native-audio-started", true);
+          mainWindow.webContents.send("aec-enabled", true);
+        } else {
+          console.log("⚠️ AEC audio capture failed:", result.error);
+          mainWindow.webContents.send("speaker-error", result.error);
+        }
+      } catch (error) {
+        console.log("⚠️ AEC audio capture error:", error.message);
+        // Fall back to separate capture methods
+      }
+    } else {
+      console.log(
+        "⚠️ AEC capture not available, using separate capture methods"
+      );
+    }
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
   try {
     // Initialize Deepgram client for backward compatibility
@@ -382,6 +535,18 @@ ipcMain.handle("stop-microphone-capture", async () => {
 
 ipcMain.handle("stop-speaker-capture", async () => {
   console.log("🛑 Stopping speaker capture...");
+
+  // Stop AEC capture if running
+  if (audioCaptureWithAEC) {
+    try {
+      const stopResult = audioCaptureWithAEC.stop();
+      console.log("✅ AEC audio capture stopped:", stopResult);
+    } catch (error) {
+      console.error("❌ Error stopping AEC audio capture:", error.message);
+    }
+    audioCaptureWithAEC = null;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
 
   // Stop native audio capture if running
   if (nativeAudioCapture) {
@@ -582,6 +747,10 @@ app.on("before-quit", () => {
   }
   if (speakerConnection) {
     speakerConnection.close();
+  }
+  if (audioCaptureWithAEC) {
+    audioCaptureWithAEC.stop();
+    audioCaptureWithAEC = null;
   }
   if (nativeAudioCapture) {
     nativeAudioCapture.stop();

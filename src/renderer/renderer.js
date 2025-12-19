@@ -173,6 +173,69 @@ async function startAll() {
     const helpText = document.getElementById("speakerHelp");
     if (helpText) helpText.style.display = "none";
 
+    // Check if we're in Electron (native capture) or browser (fallback)
+    const isElectron = typeof window !== "undefined" && window.electronAPI;
+
+    // Try AEC-enabled capture first (macOS only, native)
+    if (isElectron) {
+      updateStatus("micStatus", "Starting...", "recording");
+      updateStatus("speakerStatus", "Starting...", "recording");
+
+      // Try AEC capture (unified native capture with echo cancellation)
+      const aecResult = await window.electronAPI.startAECCapture(
+        deepgramApiKey
+      );
+
+      // Listen for AEC enabled event
+      window.electronAPI.onAECEnabled((enabled) => {
+        if (enabled) {
+          console.log(
+            "✅ AEC-enabled capture active - using native microphone with echo cancellation"
+          );
+          updateStatus("micStatus", "Recording (AEC)", "recording");
+          updateStatus("speakerStatus", "Recording", "recording");
+        }
+      });
+
+      // If AEC capture succeeded, we're done (both streams handled natively)
+      if (aecResult.success) {
+        // Status will be updated via events
+        console.log("✅ AEC capture started - both streams handled natively");
+        // Set a timeout to check if AEC actually started
+        setTimeout(() => {
+          // If status hasn't been updated, fall back to separate capture
+          if (
+            document.getElementById("micStatus").textContent === "Starting..."
+          ) {
+            console.log(
+              "⚠️ AEC capture may not be available, falling back to separate capture"
+            );
+            startSeparateCapture();
+          }
+        }, 2000);
+      } else {
+        // Fall back to separate capture methods
+        console.log(
+          "⚠️ AEC capture not available, using separate capture methods"
+        );
+        await startSeparateCapture();
+      }
+    } else {
+      // Browser fallback - use separate capture
+      await startSeparateCapture();
+    }
+  } catch (error) {
+    console.error("Error starting recording:", error);
+    showError(`Error: ${error.message}`);
+    // Re-enable start button if there was an error
+    document.getElementById("startAll").disabled = false;
+    document.getElementById("stopAll").disabled = true;
+  }
+}
+
+// Helper function for separate capture (fallback)
+async function startSeparateCapture() {
+  try {
     // Start microphone
     updateStatus("micStatus", "Starting...", "recording");
     const micResult = await window.electronAPI.startMicrophoneCapture(
@@ -260,11 +323,10 @@ async function startAll() {
       }
     }, 5000);
   } catch (error) {
-    console.error("Error starting recording:", error);
+    console.error("Error in startSeparateCapture:", error);
     showError(`Error: ${error.message}`);
-    // Re-enable start button if there was an error
-    document.getElementById("startAll").disabled = false;
-    document.getElementById("stopAll").disabled = true;
+    updateStatus("micStatus", "Error", "error");
+    updateStatus("speakerStatus", "Error", "error");
   }
 }
 

@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("start-microphone-capture", apiKey),
   startSpeakerCapture: (apiKey) =>
     ipcRenderer.invoke("start-speaker-capture", apiKey),
+  startAECCapture: (apiKey) => ipcRenderer.invoke("start-aec-capture", apiKey),
   stopMicrophoneCapture: () => ipcRenderer.invoke("stop-microphone-capture"),
   stopSpeakerCapture: () => ipcRenderer.invoke("stop-speaker-capture"),
 
@@ -41,6 +42,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("microphone-error", (event, error) => callback(error)),
   onSpeakerError: (callback) =>
     ipcRenderer.on("speaker-error", (event, error) => callback(error)),
+  onAECEnabled: (callback) =>
+    ipcRenderer.on("aec-enabled", (event, value) => callback(value)),
   onTranscript: (callback) =>
     ipcRenderer.on("transcript", (event, data) => callback(data)),
 

@@ -91,14 +91,15 @@ class AudioCapture {
       });
 
       // Request audio with constraints that work better with hardware
-      // Disable browser noise suppression if RNNoise worker is available
+      // CRITICAL: Disable browser echo cancellation when using native AEC
+      // Browser AEC conflicts with native AEC and causes echo pumping/hollow voices
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           // Don't force sample rate - use native rate (better quality)
-          echoCancellation: true,
+          echoCancellation: false, // DISABLED - using native AEC instead
           noiseSuppression: !this.workerInitialized, // Disable if RNNoise worker active
-          autoGainControl: true,
+          autoGainControl: false, // DISABLED - let native AEC handle gain
         },
       });
 

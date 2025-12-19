@@ -8,7 +8,9 @@
     "rebuild": "node-gyp rebuild",
     "build": "node-gyp build",
     "clean": "node-gyp clean",
-    "configure": "node-gyp configure"
+    "configure": "node-gyp configure",
+    "setup-webrtc": "./setup-webrtc.sh",
+    "check-webrtc": "node check-webrtc.js"
   },
   "gypfile": true,
   "dependencies": {
