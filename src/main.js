@@ -68,7 +68,7 @@ function createMicrophoneConnection(apiKey, sampleRate = 16000) {
     interimResults: true,
     punctuate: true,
     smartFormat: true,
-    diarize: true,
+    diarize: false,
     type: "microphone",
     onTranscript: (transcript, isFinal, words) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
