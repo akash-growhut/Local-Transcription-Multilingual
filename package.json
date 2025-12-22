@@ -11,6 +11,8 @@
     "dev": "electron . --dev",
     "build": "electron-builder",
     "build-native": "cd native-audio && npm install && npm run rebuild",
+    "download-blackhole": "node scripts/download-blackhole.js",
+    "prebuild": "npm run download-blackhole || echo 'BlackHole download skipped'",
     "postinstall": "npm run build-native || echo 'Native module build skipped (not on macOS or build failed)'"
   },
   "dependencies": {

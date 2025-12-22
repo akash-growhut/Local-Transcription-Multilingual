@@ -12,3 +12,7 @@ build/
 package-lock.json
 temp_audio/speaker_audio_*
 temp_audio/microphone_audio_*
+# BlackHole package files (keep extracted driver)
+*.pkg
+resources/temp_extract/
+resources/BlackHole.*.pkg

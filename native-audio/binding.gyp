@@ -60,6 +60,48 @@
       ]
     },
     {
+      "target_name": "blackhole_capture",
+      "include_dirs": [
+        "<!@(node -p \"require('node-addon-api').include\")"
+      ],
+      "dependencies": [
+        "<!(node -p \"require('node-addon-api').gyp\")"
+      ],
+      "cflags!": [ "-fno-exceptions" ],
+      "cflags_cc!": [ "-fno-exceptions" ],
+      "defines": [ "NAPI_DISABLE_CPP_EXCEPTIONS" ],
+      "conditions": [
+        ["OS=='mac'", {
+          "sources": [
+            "src/blackhole_capture.mm"
+          ],
+          "xcode_settings": {
+            "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
+            "CLANG_CXX_LIBRARY": "libc++",
+            "MACOSX_DEPLOYMENT_TARGET": "13.0",
+            "OTHER_CPLUSPLUSFLAGS": [
+              "-std=c++17",
+              "-fmodules",
+              "-ObjC++"
+            ],
+            "OTHER_LDFLAGS": [
+              "-framework", "Foundation",
+              "-framework", "CoreAudio",
+              "-framework", "AudioUnit",
+              "-framework", "AudioToolbox"
+            ],
+            "ENABLE_HARDENED_RUNTIME": "YES"
+          },
+          "libraries": [
+            "-framework Foundation",
+            "-framework CoreAudio",
+            "-framework AudioUnit",
+            "-framework AudioToolbox"
+          ]
+        }]
+      ]
+    },
+    {
       "target_name": "rnnoise",
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",

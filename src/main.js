@@ -8,15 +8,26 @@ const { createDeepgramConnection } = require("./deepgram-streaming");
 
 // Try to load native audio capture module (macOS only)
 let NativeAudioCapture = null;
+let BlackHoleCapture = null;
 let nativeAudioCapture = null;
+let blackHoleManager = null;
 
 if (process.platform === "darwin") {
   try {
-    NativeAudioCapture = require("../native-audio/index.js");
+    const audioModule = require("../native-audio/index.js");
+    NativeAudioCapture = audioModule;
+    BlackHoleCapture = audioModule.BlackHoleCapture;
     console.log("✅ Native audio capture module loaded");
   } catch (error) {
     console.log("⚠️ Native audio capture not available:", error.message);
     console.log("   Falling back to web API method");
+  }
+
+  try {
+    blackHoleManager = require("./blackhole-manager.js");
+    console.log("✅ BlackHole manager loaded");
+  } catch (error) {
+    console.log("⚠️ BlackHole manager not available:", error.message);
   }
 }
 
@@ -219,9 +230,44 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
     // Create WebSocket streaming connection for speaker
     createSpeakerConnection(apiKey);
 
-    // Try to start native audio capture if available (macOS)
-    if (NativeAudioCapture && process.platform === "darwin") {
+    // Try to start BlackHole capture if available (macOS)
+    if (BlackHoleCapture && process.platform === "darwin") {
       try {
+        // Check and setup BlackHole first
+        if (blackHoleManager) {
+          console.log("🔧 Checking BlackHole setup...");
+          const setupResult = await blackHoleManager.setup();
+          if (!setupResult.success) {
+            console.log("⚠️ BlackHole setup failed:", setupResult.error);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              let errorMsg = `BlackHole setup failed: ${setupResult.error}`;
+              if (setupResult.needsRestart) {
+                errorMsg +=
+                  "\n\nPlease restart your Mac after installing BlackHole.";
+              }
+              if (setupResult.needsManualInstall) {
+                errorMsg +=
+                  "\n\nPlease install BlackHole manually and restart your Mac.";
+              }
+              mainWindow.webContents.send("speaker-error", errorMsg);
+            }
+            // Don't continue if installation failed - BlackHole won't be available
+            return { success: false, error: setupResult.error };
+          } else {
+            console.log("✅ BlackHole setup complete");
+            // If setup succeeded but needs restart, warn user
+            if (setupResult.needsRestart) {
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send(
+                  "speaker-error",
+                  "BlackHole installed. Please restart your Mac for it to be recognized, then try again."
+                );
+              }
+              return { success: false, error: "Restart required" };
+            }
+          }
+        }
+
         // Always create a fresh instance to avoid state issues
         if (nativeAudioCapture) {
           console.log(
@@ -239,8 +285,12 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
 
         let audioSampleCount = 0;
 
-        console.log("🎙️ Creating new native audio capture instance...");
-        nativeAudioCapture = new NativeAudioCapture((audioBuffer) => {
+        console.log("🎙️ Creating new BlackHole capture instance...");
+        nativeAudioCapture = new BlackHoleCapture((audioBuffer) => {
+          console.log(
+            "🎙️ BlackHole audio capture callback",
+            audioBuffer.length
+          );
           // audioBuffer is a Node Buffer of float32 PCM from native
           // Reinterpret bytes as Float32Array without copying per-element
           const byteOffset = audioBuffer.byteOffset || 0;
@@ -348,17 +398,19 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
 
         const result = nativeAudioCapture.start();
         if (result.success) {
-          console.log("✅ Native macOS audio capture started");
+          console.log("✅ BlackHole audio capture started");
           mainWindow.webContents.send("native-audio-started", true);
         } else {
-          console.log("⚠️ Native audio capture failed");
+          console.log("⚠️ BlackHole capture failed:", result.error);
           mainWindow.webContents.send(
             "speaker-error",
-            "Native audio capture failed. Please check Screen Recording permissions in System Preferences."
+            `BlackHole capture failed: ${
+              result.error || "Unknown error"
+            }. Please ensure BlackHole is installed and a Multi-Output Device is configured.`
           );
         }
       } catch (error) {
-        console.log("⚠️ Native audio capture error:", error.message);
+        console.log("⚠️ BlackHole capture error:", error.message);
         // Continue with web API fallback
       }
     }
@@ -550,6 +602,71 @@ ipcMain.handle("destroy-rnnoise", async () => {
     return { success: true };
   } catch (error) {
     console.error("❌ Failed to destroy RNNoise:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+// BlackHole management handlers
+ipcMain.handle("check-blackhole", async () => {
+  if (!blackHoleManager || process.platform !== "darwin") {
+    return { available: false, error: "BlackHole manager not available" };
+  }
+  try {
+    const isInstalled = await blackHoleManager.checkInstalled();
+    const availability = await blackHoleManager.checkBlackHoleAvailable();
+    return {
+      available: availability.available,
+      installed: isInstalled,
+    };
+  } catch (error) {
+    return { available: false, error: error.message };
+  }
+});
+
+ipcMain.handle("setup-blackhole", async () => {
+  if (!blackHoleManager || process.platform !== "darwin") {
+    return { success: false, error: "BlackHole manager not available" };
+  }
+  try {
+    const result = await blackHoleManager.setup();
+    return result;
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("install-blackhole", async () => {
+  if (!blackHoleManager || process.platform !== "darwin") {
+    return { success: false, error: "BlackHole manager not available" };
+  }
+  try {
+    const result = await blackHoleManager.install();
+    return result;
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("get-audio-devices", async () => {
+  if (!blackHoleManager || process.platform !== "darwin") {
+    return { success: false, error: "BlackHole manager not available" };
+  }
+  try {
+    const result = await blackHoleManager.getAudioDevices();
+    return result;
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("open-blackhole-installer", async () => {
+  if (!blackHoleManager || process.platform !== "darwin") {
+    return { success: false, error: "BlackHole manager not available" };
+  }
+  try {
+    const result = await blackHoleManager.openPkgForInstallation();
+    return result;
+  } catch (error) {
     return { success: false, error: error.message };
   }
 });
