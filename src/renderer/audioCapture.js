@@ -294,13 +294,12 @@ class AudioCapture {
               throw new Error(
                 `Unable to capture system audio: ${error.message}\n\n` +
                   "This may require:\n" +
-                  "• Screen recording permission (macOS: System Preferences > Security & Privacy > Screen Recording)\n" +
                   "• Selecting an audio source in the sharing dialog\n" +
-                  "• Or a native audio capture module for automatic capture\n\n" +
-                  "For production use, integrate native modules:\n" +
-                  "• macOS: ScreenCaptureKit (macOS 13+) or BlackHole\n" +
+                  "• Or installing the HAL AudioServerPlugIn driver for automatic capture\n\n" +
+                  "For production use with automatic capture:\n" +
+                  "• macOS: HAL AudioServerPlugIn driver (no screen recording permission needed)\n" +
                   "• Windows: WASAPI Loopback\n\n" +
-                  "See NATIVE_MODULE_NOTES.md for integration details."
+                  "See ARCHITECTURE.md for driver installation details."
               );
             }
           } else {
@@ -310,8 +309,8 @@ class AudioCapture {
                 "getDisplayMedia is not supported. This may indicate:\n" +
                 "• Electron version issue\n" +
                 "• Missing permissions\n" +
-                "• Or use a native audio capture module\n\n" +
-                "See NATIVE_MODULE_NOTES.md for native module integration."
+                "• Or install the HAL AudioServerPlugIn driver\n\n" +
+                "See ARCHITECTURE.md for driver installation details."
             );
           }
         }
@@ -487,14 +486,14 @@ class AudioCapture {
         error.message.includes("Not supported")
       ) {
         errorMessage =
-          "Screen sharing API not supported in this Electron version.\n\n" +
+            "Screen sharing API not supported in this Electron version.\n\n" +
           "This feature requires:\n" +
           "• Electron 5.0+ with desktopCapturer enabled\n" +
-          "• Or a native audio capture module\n\n" +
-          "For production use, integrate native modules:\n" +
-          "• macOS: ScreenCaptureKit (macOS 13+) or BlackHole\n" +
+          "• Or install the HAL AudioServerPlugIn driver\n\n" +
+          "For production use with automatic capture:\n" +
+          "• macOS: HAL AudioServerPlugIn driver (no screen recording permission needed)\n" +
           "• Windows: WASAPI Loopback\n\n" +
-          "See NATIVE_MODULE_NOTES.md for integration details.";
+          "See ARCHITECTURE.md for driver installation details.";
       }
 
       return { success: false, error: errorMessage };

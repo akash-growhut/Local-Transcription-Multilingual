@@ -1,7 +1,7 @@
 {
   "targets": [
     {
-      "target_name": "speaker_audio_capture",
+      "target_name": "driver_audio_capture",
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")"
       ],
@@ -14,7 +14,7 @@
       "conditions": [
         ["OS=='mac'", {
           "sources": [
-            "src/speaker_audio_capture.mm"
+            "src/speaker_audio_capture_driver.mm"
           ],
           "xcode_settings": {
             "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
@@ -27,17 +27,13 @@
             ],
             "OTHER_LDFLAGS": [
               "-framework", "Foundation",
-              "-framework", "ScreenCaptureKit",
-              "-framework", "AVFoundation",
-              "-framework", "CoreMedia"
+              "-framework", "CoreAudio"
             ],
             "ENABLE_HARDENED_RUNTIME": "YES"
           },
           "libraries": [
             "-framework Foundation",
-            "-framework ScreenCaptureKit",
-            "-framework AVFoundation",
-            "-framework CoreMedia"
+            "-framework CoreAudio"
           ]
         }],
         ["OS=='win'", {

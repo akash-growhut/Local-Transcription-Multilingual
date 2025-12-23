@@ -354,7 +354,7 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey) => {
           console.log("⚠️ Native audio capture failed");
           mainWindow.webContents.send(
             "speaker-error",
-            "Native audio capture failed. Please check Screen Recording permissions in System Preferences."
+            "HAL audio driver not available. Please ensure the virtual audio driver is installed and set as your system output device. See installation instructions in README.md"
           );
         }
       } catch (error) {

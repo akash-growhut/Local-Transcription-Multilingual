@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>English</string>
+    <key>CFBundleExecutable</key>
+    <string>GrowhutAudioDriver</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.growhut.audiodriver</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Growhut Audio Driver</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFPlugInFactories</key>
+    <dict>
+        <key>A1B2C3D4-E5F6-7890-ABCD-EF1234567890</key>
+        <dict>
+            <key>CFPlugInTypes</key>
+            <array>
+                <string>3F6F4D9B-5F93-4161-A5C7-8C687C0B3EB4</string>
+            </array>
+        </dict>
+    </dict>
+    <key>CFPlugInTypes</key>
+    <dict>
+        <key>3F6F4D9B-5F93-4161-A5C7-8C687C0B3EB4</key>
+        <array>
+            <dict>
+                <key>CFPlugInFactories</key>
+                <array>
+                    <string>A1B2C3D4-E5F6-7890-ABCD-EF1234567890</string>
+                </array>
+            </dict>
+        </array>
+    </dict>
+    <key>OSBundleRequired</key>
+    <string>Safe Boot</string>
+</dict>
+</plist>
+

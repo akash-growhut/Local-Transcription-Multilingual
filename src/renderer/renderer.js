@@ -202,9 +202,8 @@ async function startAll() {
     const isElectron = typeof window !== "undefined" && window.electronAPI;
 
     if (isElectron) {
-      // In Electron: Use native audio capture module (speaker_audio_capture.mm)
-      // This uses macOS ScreenCaptureKit for automatic system audio capture
-      // No user interaction required - direct OS-level access
+      // In Electron: Use HAL AudioServerPlugIn driver for automatic system audio capture
+      // No user interaction required - direct OS-level access via virtual audio device
       const speakerResult = await window.electronAPI.startSpeakerCapture(
         deepgramApiKey
       );
@@ -213,10 +212,10 @@ async function startAll() {
         updateStatus("speakerStatus", "Error", "error");
       } else {
         // Native capture is handled entirely in main process
-        // Audio flows: ScreenCaptureKit → native module → main.js → Deepgram
+        // Audio flows: System Audio → HAL Driver → shared memory → native module → main.js → Deepgram
         // Status will be updated via onSpeakerConnected event when WebSocket is ready
         console.log(
-          "✅ Native speaker capture started in Electron (using speaker_audio_capture.mm)"
+          "✅ Native speaker capture started in Electron (using HAL AudioServerPlugIn driver)"
         );
       }
     } else {
