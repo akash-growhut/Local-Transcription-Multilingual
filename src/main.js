@@ -603,6 +603,11 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey, options = {}) => {
             }
 
             if (SPEAKER_RECORDING_ENABLED && !speakerAudioFileWritten) {
+              if (halFrameCount <= 5) {
+                console.log(
+                  `🔍 [JS] MP3 Recording: enabled=${SPEAKER_RECORDING_ENABLED}, written=${speakerAudioFileWritten}, stream=${!!speakerMp3Stream}`
+                );
+              }
               if (!speakerMp3Stream) {
                 console.log(`🎬 [JS] Initializing MP3 recording stream...`);
                 // Initialize MP3 recording stream synchronously
@@ -724,13 +729,18 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey, options = {}) => {
                   speakerMp3Stream.startTime = Date.now();
                   speakerMp3Stream.bytesWritten = 0;
                   console.log(
-                    `💾 Recording speaker audio to MP3: ${speakerMp3Path}`
+                    `💾 [JS] Recording speaker audio to MP3: ${speakerMp3Path}`
+                  );
+                  console.log(
+                    `💾 [JS] FFmpeg process stdin stream ready, waiting for audio data...`
                   );
                 } else {
                   console.warn(
-                    `⚠️ Failed to create FFmpeg process, MP3 recording disabled`
+                    `⚠️ [JS] Failed to create FFmpeg process, MP3 recording disabled`
                   );
-                  console.warn(`   Check if ffmpeg is installed: which ffmpeg`);
+                  console.warn(
+                    `   [JS] Check if ffmpeg is installed: which ffmpeg`
+                  );
                 }
               }
 
@@ -746,21 +756,30 @@ ipcMain.handle("start-speaker-capture", async (event, apiKey, options = {}) => {
                   );
 
                   if (pcmBuffer.length === 0) {
-                    console.warn(
-                      `⚠️ [JS] Empty PCM buffer, skipping MP3 write`
-                    );
+                    if (halFrameCount <= 10) {
+                      console.warn(
+                        `⚠️ [JS] Empty PCM buffer, skipping MP3 write (chunk #${halFrameCount})`
+                      );
+                    }
                   } else {
                     // Debug: Log first write
                     if (!speakerMp3Stream.hasWritten) {
                       console.log(
-                        `📝 [JS] First MP3 write: ${pcmBuffer.length} bytes to ${speakerMp3Path}`
+                        `📝 [JS] ✨ FIRST MP3 WRITE: ${pcmBuffer.length} bytes to ${speakerMp3Path}`
+                      );
+                      console.log(
+                        `📝 [JS] int16Data: length=${int16Data.length}, byteLength=${int16Data.byteLength}`
                       );
                       speakerMp3Stream.hasWritten = true;
                     }
 
-                    if (halFrameCount < 5) {
+                    if (halFrameCount < 10) {
                       console.log(
-                        `📝 [JS] Writing to MP3: ${pcmBuffer.length} bytes (chunk #${halFrameCount})`
+                        `📝 [JS] Writing to MP3: ${
+                          pcmBuffer.length
+                        } bytes (chunk #${halFrameCount}, total written=${
+                          speakerMp3Stream.bytesWritten || 0
+                        })`
                       );
                     }
                     const written = speakerMp3Stream.write(pcmBuffer);

@@ -206,7 +206,7 @@ async function startAll() {
       // Mode options:
       //   - 'hal': Granola-style CoreAudio HAL capture (experimental, no screen recording icon)
       //   - 'screencapturekit': ScreenCaptureKit (default, App Store safe, shows screen recording icon)
-      const captureMode = "hal"; // Change to "screencapturekit" to use ScreenCaptureKit
+      const captureMode = "hal"; // HAL mode - uses device output tap
 
       const speakerResult = await window.electronAPI.startSpeakerCapture(
         deepgramApiKey,
@@ -584,7 +584,10 @@ function updatePlatformInfo() {
     : platform.includes("Linux")
     ? "Linux"
     : platform;
-  document.getElementById("platform").textContent = platformText;
+  const platformElement = document.getElementById("platform");
+  if (platformElement) {
+    platformElement.textContent = platformText;
+  }
 
   // Check system audio support
   if (

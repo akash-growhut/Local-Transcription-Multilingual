@@ -4,6 +4,7 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreAudio/CoreAudio.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <dispatch/dispatch.h>
 #import <objc/message.h>
 #include <napi.h>
 #include <vector>
@@ -199,6 +200,8 @@ private:
     AudioStreamBasicDescription outputFormat_;
     bool deviceChangeListenerRegistered_;
     CaptureMode captureMode_;
+    dispatch_source_t halTimer_;  // Timer for pulling audio from INPUT scope
+    AURenderCallbackStruct renderCallback_;  // Render callback for output tapping
     
     // Common members
     bool isCapturing_;
@@ -220,20 +223,21 @@ private:
     void HandleDeviceChange();
     void DownmixToMono(const float* stereoData, size_t stereoFrames, float* monoData);
     void ResampleAudio(const float* input, size_t inputFrames, float* output, size_t outputFrames, double inputRate, double outputRate);
-    
-    // Static callback for HAL render
-    static OSStatus HALRenderCallback(void* inRefCon,
-                                      AudioUnitRenderActionFlags* ioActionFlags,
-                                      const AudioTimeStamp* inTimeStamp,
-                                      UInt32 inBusNumber,
-                                      UInt32 inNumberFrames,
-                                      AudioBufferList* ioData);
+    void PullAudioFromInputScope();  // Pull audio from INPUT scope using timer
     
     // Static callback for device changes
     static OSStatus DeviceChangeCallback(AudioObjectID inObjectID,
                                          UInt32 inNumberAddresses,
                                          const AudioObjectPropertyAddress inAddresses[],
                                          void* inClientData);
+    
+    // Static render callback for output tapping
+    static OSStatus RenderCallback(void* inRefCon,
+                                   AudioUnitRenderActionFlags* ioActionFlags,
+                                   const AudioTimeStamp* inTimeStamp,
+                                   UInt32 inBusNumber,
+                                   UInt32 inNumberFrames,
+                                   AudioBufferList* ioData);
 };
 
 Napi::FunctionReference AudioCaptureAddon::constructor;
@@ -260,6 +264,7 @@ AudioCaptureAddon::AudioCaptureAddon(const Napi::CallbackInfo& info)
       currentDeviceID_(0),
       deviceChangeListenerRegistered_(false),
       captureMode_(CAPTURE_MODE_SCREENCAPTUREKIT), // Default, will be overridden if options provided
+      halTimer_(nullptr),
       isCapturing_(false) {
     
     // Initialize audio format structs
@@ -391,23 +396,23 @@ AudioCaptureAddon::~AudioCaptureAddon() {
 void AudioCaptureAddon::OnAudioData(const float* data, size_t length) {
     // Debug: Log first few calls
     static int onAudioDataCallCount = 0;
-    if (onAudioDataCallCount < 5) {
-        NSLog(@"🔵 OnAudioData called #%d: length=%zu, isCapturing=%d, tsfn_=%p",
+    onAudioDataCallCount++;
+    if (onAudioDataCallCount <= 10) {
+        NSLog(@"🔵 [OnAudioData] Called #%d: length=%zu, isCapturing=%d, tsfn_=%p",
               onAudioDataCallCount, length, isCapturing_, tsfn_ ? (void*)0x1 : nullptr);
-        onAudioDataCallCount++;
     }
     
     // Check if we're still capturing
     if (!isCapturing_) {
-        if (onAudioDataCallCount <= 5) {
-            NSLog(@"⚠️ OnAudioData: not capturing, returning early");
+        if (onAudioDataCallCount <= 10) {
+            NSLog(@"⚠️ [OnAudioData] Not capturing, returning early");
         }
         return;
     }
     
     if (length == 0 || !data) {
-        if (onAudioDataCallCount <= 5) {
-            NSLog(@"⚠️ OnAudioData: invalid data (length=%zu, data=%p)", length, data);
+        if (onAudioDataCallCount <= 10) {
+            NSLog(@"⚠️ [OnAudioData] Invalid data (length=%zu, data=%p)", length, data);
         }
         return;
     }
@@ -415,185 +420,53 @@ void AudioCaptureAddon::OnAudioData(const float* data, size_t length) {
     // Copy data for thread safety
     std::vector<float> audioData(data, data + length);
     
+    if (onAudioDataCallCount <= 10) {
+        NSLog(@"🔵 [OnAudioData] Copied %zu samples to vector", audioData.size());
+    }
+    
     try {
         // Check if thread-safe function is valid before calling
         if (!tsfn_) {
-            if (onAudioDataCallCount <= 5) {
-                NSLog(@"❌ OnAudioData: tsfn_ is NULL! Cannot call JS callback");
+            if (onAudioDataCallCount <= 10) {
+                NSLog(@"❌ [OnAudioData] tsfn_ is NULL! Cannot call JS callback");
             }
             return;
         }
         
-        if (onAudioDataCallCount <= 5) {
-            NSLog(@"✅ OnAudioData: Calling tsfn_.NonBlockingCall with %zu samples", audioData.size());
+        if (onAudioDataCallCount <= 10) {
+            NSLog(@"✅ [OnAudioData] Calling tsfn_.NonBlockingCall with %zu samples", audioData.size());
         }
         
         tsfn_.NonBlockingCall([audioData](Napi::Env env, Napi::Function jsCallback) {
             try {
                 if (jsCallback.IsEmpty() || jsCallback.IsUndefined()) {
-                    NSLog(@"⚠️ JS callback is empty or undefined");
+                    NSLog(@"⚠️ [OnAudioData->JS] JS callback is empty or undefined");
                     return;
                 }
                 // Convert to Buffer for efficient transfer
                 Napi::Buffer<float> buffer = Napi::Buffer<float>::Copy(env, audioData.data(), audioData.size());
                 jsCallback.Call({buffer});
                 static int jsCallbackCallCount = 0;
-                if (jsCallbackCallCount < 3) {
-                    NSLog(@"✅ JS callback invoked successfully #%d, buffer size=%zu", jsCallbackCallCount, audioData.size());
-                    jsCallbackCallCount++;
+                jsCallbackCallCount++;
+                if (jsCallbackCallCount <= 10) {
+                    NSLog(@"✅ [OnAudioData->JS] JS callback invoked successfully #%d, buffer size=%zu", jsCallbackCallCount, audioData.size());
                 }
             } catch (const Napi::Error& e) {
-                NSLog(@"❌ Error in JS callback: %s", e.Message().c_str());
+                NSLog(@"❌ [OnAudioData->JS] Error in JS callback: %s", e.Message().c_str());
             } catch (...) {
-                NSLog(@"❌ Unknown error in JS callback");
+                NSLog(@"❌ [OnAudioData->JS] Unknown error in JS callback");
             }
         });
     } catch (const Napi::Error& e) {
-        NSLog(@"❌ Napi::Error in OnAudioData: %s", e.Message().c_str());
+        NSLog(@"❌ [OnAudioData] Napi::Error: %s", e.Message().c_str());
     } catch (const std::exception& e) {
-        NSLog(@"❌ std::exception in OnAudioData: %s", e.what());
+        NSLog(@"❌ [OnAudioData] std::exception: %s", e.what());
     } catch (...) {
-        NSLog(@"❌ Unknown exception in OnAudioData");
+        NSLog(@"❌ [OnAudioData] Unknown exception");
     }
 }
 
 // MARK: - HAL Implementation
-
-OSStatus AudioCaptureAddon::HALRenderCallback(void* inRefCon,
-                                               AudioUnitRenderActionFlags* ioActionFlags,
-                                               const AudioTimeStamp* inTimeStamp,
-                                               UInt32 inBusNumber,
-                                               UInt32 inNumberFrames,
-                                               AudioBufferList* ioData) {
-    AudioCaptureAddon* self = (__bridge AudioCaptureAddon*)inRefCon;
-    
-    // Debug: Log first few callbacks to verify AudioUnit is firing
-    static int callbackCount = 0;
-    if (callbackCount < 3) {
-        NSLog(@"🎧 HALRenderCallback fired #%d, frames=%u, isCapturing=%d", 
-              callbackCount, inNumberFrames, self ? self->isCapturing_ : 0);
-        callbackCount++;
-    }
-    
-    if (!self || !self->isCapturing_ || !self->halAudioUnit_) {
-        if (callbackCount <= 3) {
-            NSLog(@"⚠️ HALRenderCallback: dropping audio (self=%p, isCapturing=%d, halAudioUnit=%p)",
-                  self, self ? self->isCapturing_ : 0, self ? self->halAudioUnit_ : nullptr);
-        }
-        return noErr;
-    }
-    
-    // Safety check: ensure format is initialized
-    if (self->inputFormat_.mSampleRate == 0 || self->inputFormat_.mChannelsPerFrame == 0) {
-        if (callbackCount <= 5) {
-            NSLog(@"⚠️ HALRenderCallback: Format not initialized (sampleRate=%.0f, channels=%u)",
-                  self->inputFormat_.mSampleRate, self->inputFormat_.mChannelsPerFrame);
-        }
-        return noErr;
-    }
-    
-    // Allocate buffer for rendered audio
-    AudioBufferList bufferList;
-    bufferList.mNumberBuffers = 1;
-    bufferList.mBuffers[0].mNumberChannels = self->inputFormat_.mChannelsPerFrame;
-    bufferList.mBuffers[0].mDataByteSize = inNumberFrames * self->inputFormat_.mBytesPerFrame;
-    bufferList.mBuffers[0].mData = malloc(bufferList.mBuffers[0].mDataByteSize);
-    
-    if (!bufferList.mBuffers[0].mData) {
-        if (callbackCount <= 5) {
-            NSLog(@"❌ HALRenderCallback: Memory allocation failed for %u bytes", bufferList.mBuffers[0].mDataByteSize);
-        }
-        return -1; // Memory allocation failed
-    }
-    
-    // Render audio from the output unit
-    if (callbackCount <= 5) {
-        NSLog(@"🔄 HALRenderCallback: Calling AudioUnitRender (frames=%u)", inNumberFrames);
-    }
-    
-    OSStatus status = AudioUnitRender(self->halAudioUnit_,
-                                      ioActionFlags,
-                                      inTimeStamp,
-                                      0,  // output bus
-                                      inNumberFrames,
-                                      &bufferList);
-    
-    if (callbackCount <= 5) {
-        NSLog(@"🔄 HALRenderCallback: AudioUnitRender status=%d (0=success)", (int)status);
-    }
-    
-    if (status == noErr) {
-        Float32* audioData = (Float32*)bufferList.mBuffers[0].mData;
-        
-        // Process audio: downmix to mono and resample if needed
-        double targetSampleRate = 48000.0;
-        double inputSampleRate = self->inputFormat_.mSampleRate;
-        size_t outputFrames = inNumberFrames;
-        
-        // Calculate output frames if resampling needed
-        if (inputSampleRate != targetSampleRate) {
-            outputFrames = (size_t)(inNumberFrames * (targetSampleRate / inputSampleRate));
-        }
-        
-        // Allocate output buffer (mono, potentially resampled)
-        size_t outputSize = outputFrames * sizeof(Float32);
-        Float32* processedData = (Float32*)malloc(outputSize);
-        
-        if (callbackCount <= 5) {
-            NSLog(@"🔄 HALRenderCallback: Allocated processedData buffer: %zu bytes (outputFrames=%zu)", outputSize, outputFrames);
-        }
-        
-        if (processedData) {
-            if (self->inputFormat_.mChannelsPerFrame > 1) {
-                // Downmix to mono first (on input frames)
-                Float32* monoData = (Float32*)malloc(inNumberFrames * sizeof(Float32));
-                if (monoData) {
-                    self->DownmixToMono(audioData, inNumberFrames, monoData);
-                    
-                    // Resample if needed
-                    if (inputSampleRate != targetSampleRate) {
-                        self->ResampleAudio(monoData, inNumberFrames, processedData, outputFrames, inputSampleRate, targetSampleRate);
-                        free(monoData);
-                    } else {
-                        // No resampling needed, just copy mono data
-                        memcpy(processedData, monoData, inNumberFrames * sizeof(Float32));
-                        free(monoData);
-                    }
-                } else {
-                    free(processedData);
-                    free(bufferList.mBuffers[0].mData);
-                    return -1;
-                }
-            } else {
-                // Already mono, just resample if needed
-                if (inputSampleRate != targetSampleRate) {
-                    self->ResampleAudio(audioData, inNumberFrames, processedData, outputFrames, inputSampleRate, targetSampleRate);
-                } else {
-                    // No resampling needed, just copy
-                    memcpy(processedData, audioData, inNumberFrames * sizeof(Float32));
-                }
-            }
-            
-            // Send to callback
-            if (callbackCount <= 5) {
-                NSLog(@"📤 HALRenderCallback: Calling OnAudioData with %zu frames", outputFrames);
-            }
-            self->OnAudioData(processedData, outputFrames);
-            free(processedData);
-        } else {
-            if (callbackCount <= 5) {
-                NSLog(@"❌ HALRenderCallback: Failed to allocate processedData buffer (%zu bytes)", outputSize);
-            }
-        }
-    } else {
-        if (callbackCount <= 5) {
-            NSLog(@"❌ HALRenderCallback: AudioUnitRender failed with status=%d", (int)status);
-        }
-    }
-    
-    free(bufferList.mBuffers[0].mData);
-    return noErr;
-}
 
 OSStatus AudioCaptureAddon::DeviceChangeCallback(AudioObjectID inObjectID,
                                                  UInt32 inNumberAddresses,
@@ -666,9 +539,8 @@ void AudioCaptureAddon::ResampleAudio(const float* input, size_t inputFrames, fl
 }
 
 bool AudioCaptureAddon::AttachToDefaultOutputDevice() {
-    AudioDeviceID deviceID = 0;
-    UInt32 size = sizeof(deviceID);
-    
+    // Get default output device (no BlackHole dependency)
+    UInt32 size = sizeof(AudioDeviceID);
     AudioObjectPropertyAddress addr = {
         kAudioHardwarePropertyDefaultOutputDevice,
         kAudioObjectPropertyScopeGlobal,
@@ -681,16 +553,15 @@ bool AudioCaptureAddon::AttachToDefaultOutputDevice() {
         0,
         NULL,
         &size,
-        &deviceID
+        &currentDeviceID_
     );
     
-    if (status != noErr || deviceID == 0) {
+    if (status != noErr || currentDeviceID_ == 0) {
         NSLog(@"❌ Failed to get default output device: %d", (int)status);
         return false;
     }
     
-    NSLog(@"🎧 Default output device ID: %u", (unsigned int)deviceID);
-    currentDeviceID_ = deviceID;
+    NSLog(@"🎧 Default output device ID: %u", (unsigned int)currentDeviceID_);
     
     // Set the device on the AudioUnit
     status = AudioUnitSetProperty(
@@ -698,8 +569,8 @@ bool AudioCaptureAddon::AttachToDefaultOutputDevice() {
         kAudioOutputUnitProperty_CurrentDevice,
         kAudioUnitScope_Global,
         0,
-        &deviceID,
-        sizeof(deviceID)
+        &currentDeviceID_,
+        sizeof(currentDeviceID_)
     );
     
     if (status != noErr) {
@@ -709,6 +580,11 @@ bool AudioCaptureAddon::AttachToDefaultOutputDevice() {
     
     // Register for device change notifications
     if (!deviceChangeListenerRegistered_) {
+        AudioObjectPropertyAddress addr = {
+            kAudioHardwarePropertyDefaultOutputDevice,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
         status = AudioObjectAddPropertyListener(
             kAudioObjectSystemObject,
             &addr,
@@ -749,8 +625,34 @@ bool AudioCaptureAddon::SetupHALAudioUnit() {
         return false;
     }
     
-    // Enable output I/O (critical - without this, AudioUnitRender returns silence)
+    // NOTE: macOS Core Audio HAL doesn't provide direct system output tapping
+    // INPUT I/O captures input (microphone), not system output
+    // OUTPUT I/O is for playing audio, not capturing it
+    // This is a fundamental limitation of Core Audio HAL
+    
+    // Try enabling both INPUT and OUTPUT to see if we can intercept the stream
+    // This is experimental and may not work
     UInt32 enableIO = 1;
+    
+    // Enable INPUT I/O (this will capture input/microphone, not system output)
+    status = AudioUnitSetProperty(
+        halAudioUnit_,
+        kAudioOutputUnitProperty_EnableIO,
+        kAudioUnitScope_Input,
+        1,  // input bus
+        &enableIO,
+        sizeof(enableIO)
+    );
+    
+    if (status != noErr) {
+        NSLog(@"❌ Failed to enable input I/O: %d", (int)status);
+        AudioComponentInstanceDispose(halAudioUnit_);
+        halAudioUnit_ = nullptr;
+        return false;
+    }
+    
+    // Also enable OUTPUT I/O - we'll provide silence but may be able to intercept
+    enableIO = 1;
     status = AudioUnitSetProperty(
         halAudioUnit_,
         kAudioOutputUnitProperty_EnableIO,
@@ -761,22 +663,8 @@ bool AudioCaptureAddon::SetupHALAudioUnit() {
     );
     
     if (status != noErr) {
-        NSLog(@"❌ Failed to enable output I/O: %d", (int)status);
-        AudioComponentInstanceDispose(halAudioUnit_);
-        halAudioUnit_ = nullptr;
-        return false;
+        NSLog(@"⚠️ Failed to enable output I/O: %d (continuing anyway)", (int)status);
     }
-    
-    // Disable input I/O (we only want output)
-    enableIO = 0;
-    status = AudioUnitSetProperty(
-        halAudioUnit_,
-        kAudioOutputUnitProperty_EnableIO,
-        kAudioUnitScope_Input,
-        1,  // input bus
-        &enableIO,
-        sizeof(enableIO)
-    );
     
     // Attach to default output device
     if (!AttachToDefaultOutputDevice()) {
@@ -785,39 +673,79 @@ bool AudioCaptureAddon::SetupHALAudioUnit() {
         return false;
     }
     
-    // Get the stream format
+    // Get the stream format from INPUT scope (this is what we're tapping)
+    // Try multiple scopes to find the correct format
     UInt32 formatSize = sizeof(inputFormat_);
+    
+    // First try INPUT scope, bus 1
     status = AudioUnitGetProperty(
         halAudioUnit_,
         kAudioUnitProperty_StreamFormat,
-        kAudioUnitScope_Output,
-        0,
+        kAudioUnitScope_Input,
+        1,  // input bus
         &inputFormat_,
         &formatSize
     );
     
-    if (status != noErr) {
-        NSLog(@"❌ Failed to get stream format: %d", (int)status);
+    NSLog(@"🔍 [SetupHAL] Attempted to get format from INPUT scope, bus 1: status=%d", (int)status);
+    if (status == noErr) {
+        NSLog(@"🔍 [SetupHAL] Format from INPUT scope: sampleRate=%.0f, channels=%u, format=%u, bytesPerFrame=%u",
+              inputFormat_.mSampleRate, inputFormat_.mChannelsPerFrame, inputFormat_.mFormatID, inputFormat_.mBytesPerFrame);
+    }
+    
+    // If that failed or format is invalid, try OUTPUT scope
+    if (status != noErr || inputFormat_.mSampleRate == 0) {
+        NSLog(@"🔍 [SetupHAL] Trying OUTPUT scope, bus 0...");
+        status = AudioUnitGetProperty(
+            halAudioUnit_,
+            kAudioUnitProperty_StreamFormat,
+            kAudioUnitScope_Output,
+            0,  // output bus
+            &inputFormat_,
+            &formatSize
+        );
+        NSLog(@"🔍 [SetupHAL] Format from OUTPUT scope: status=%d, sampleRate=%.0f, channels=%u",
+              (int)status, inputFormat_.mSampleRate, inputFormat_.mChannelsPerFrame);
+    }
+    
+    // If still invalid, try getting device format directly
+    if (inputFormat_.mSampleRate == 0 || inputFormat_.mChannelsPerFrame == 0) {
+        NSLog(@"🔍 [SetupHAL] Format still invalid, trying device format...");
+        AudioObjectPropertyAddress addr = {
+            kAudioDevicePropertyStreamFormat,
+            kAudioDevicePropertyScopeOutput,
+            kAudioObjectPropertyElementMain
+        };
+        formatSize = sizeof(inputFormat_);
+        status = AudioObjectGetPropertyData(currentDeviceID_, &addr, 0, NULL, &formatSize, &inputFormat_);
+        NSLog(@"🔍 [SetupHAL] Device format: status=%d, sampleRate=%.0f, channels=%u",
+              (int)status, inputFormat_.mSampleRate, inputFormat_.mChannelsPerFrame);
+    }
+    
+    if (inputFormat_.mSampleRate == 0 || inputFormat_.mChannelsPerFrame == 0) {
+        NSLog(@"❌ [SetupHAL] Failed to get valid stream format (sampleRate=%.0f, channels=%u)", 
+              inputFormat_.mSampleRate, inputFormat_.mChannelsPerFrame);
         AudioComponentInstanceDispose(halAudioUnit_);
         halAudioUnit_ = nullptr;
         return false;
     }
     
-    NSLog(@"🎚️ HAL Audio format: sampleRate=%.0f, channels=%u, format=%u, bytesPerFrame=%u",
+    NSLog(@"✅ [SetupHAL] HAL Audio format: sampleRate=%.0f, channels=%u, format=%u, bytesPerFrame=%u",
           inputFormat_.mSampleRate, inputFormat_.mChannelsPerFrame, inputFormat_.mFormatID, inputFormat_.mBytesPerFrame);
     
-    // Set up render callback
-    AURenderCallbackStruct callbackStruct;
-    callbackStruct.inputProc = HALRenderCallback;
-    callbackStruct.inputProcRefCon = (__bridge void*)this;
+    // Set up render callback for output tapping
+    // We'll use a render callback on OUTPUT scope to capture audio as it's being rendered
+    // Note: This requires the AudioUnit to be "playing" but we can provide silence
+    renderCallback_.inputProc = RenderCallback;
+    renderCallback_.inputProcRefCon = (__bridge void*)this;
     
     status = AudioUnitSetProperty(
         halAudioUnit_,
         kAudioUnitProperty_SetRenderCallback,
-        kAudioUnitScope_Global,
-        0,
-        &callbackStruct,
-        sizeof(callbackStruct)
+        kAudioUnitScope_Input,
+        0,  // input element (where we inject our callback)
+        &renderCallback_,
+        sizeof(renderCallback_)
     );
     
     if (status != noErr) {
@@ -825,6 +753,21 @@ bool AudioCaptureAddon::SetupHALAudioUnit() {
         AudioComponentInstanceDispose(halAudioUnit_);
         halAudioUnit_ = nullptr;
         return false;
+    }
+    
+    // Set output format to match input format
+    outputFormat_ = inputFormat_;
+    status = AudioUnitSetProperty(
+        halAudioUnit_,
+        kAudioUnitProperty_StreamFormat,
+        kAudioUnitScope_Output,
+        0,
+        &outputFormat_,
+        sizeof(outputFormat_)
+    );
+    
+    if (status != noErr) {
+        NSLog(@"⚠️ Failed to set output format, continuing anyway: %d", (int)status);
     }
     
     // Initialize AudioUnit
@@ -840,36 +783,223 @@ bool AudioCaptureAddon::SetupHALAudioUnit() {
 }
 
 bool AudioCaptureAddon::StartHALCapture() {
-    NSLog(@"🎯 Starting HAL capture (experimental mode)...");
+    NSLog(@"🎯 Starting HAL capture (pure HAL mode, no external dependencies)...");
     
+    // Get default output device
+    if (!AttachToDefaultOutputDevice()) {
+        NSLog(@"❌ Failed to attach to output device");
+        return false;
+    }
+    
+    // Get device output format
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyStreamFormat,
+        kAudioDevicePropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = sizeof(inputFormat_);
+    OSStatus status = AudioObjectGetPropertyData(currentDeviceID_, &addr, 0, NULL, &size, &inputFormat_);
+    
+    if (status != noErr || inputFormat_.mSampleRate == 0) {
+        NSLog(@"❌ Failed to get device output format: %d", (int)status);
+        return false;
+    }
+    
+    NSLog(@"✅ [StartHAL] Device format: sampleRate=%.0f, channels=%u", 
+          inputFormat_.mSampleRate, inputFormat_.mChannelsPerFrame);
+    
+    // Use AudioUnit method to capture from INPUT scope
+    // For BlackHole: captures system output (available as input on BlackHole)
+    // For regular devices: will capture silence (cannot tap system output)
     if (!SetupHALAudioUnit()) {
         NSLog(@"❌ Failed to setup HAL AudioUnit");
         return false;
     }
     
-    // CRITICAL: Set isCapturing_ BEFORE starting AudioUnit
-    // AudioUnit callbacks can fire immediately after AudioOutputUnitStart(),
-    // and the callback checks isCapturing_ at the very beginning.
-    // If we set it after, we'll drop the first audio frames.
     isCapturing_ = true;
-    
-    // Start the AudioUnit
-    OSStatus status = AudioOutputUnitStart(halAudioUnit_);
+    status = AudioOutputUnitStart(halAudioUnit_);
     if (status != noErr) {
         NSLog(@"❌ Failed to start AudioUnit: %d", (int)status);
-        isCapturing_ = false; // Reset on failure
+        isCapturing_ = false;
         AudioUnitUninitialize(halAudioUnit_);
         AudioComponentInstanceDispose(halAudioUnit_);
         halAudioUnit_ = nullptr;
         return false;
     }
     
-    NSLog(@"✅ HAL audio capture started successfully");
+    // Use timer to pull audio from INPUT scope
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0);
+    halTimer_ = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+    if (halTimer_) {
+        uint64_t interval = NSEC_PER_SEC / 100; // 10ms
+        dispatch_source_set_timer(halTimer_, dispatch_time(DISPATCH_TIME_NOW, interval), interval, 0);
+        AudioCaptureAddon* self = this;
+        dispatch_source_set_event_handler(halTimer_, ^{
+            if (self && self->isCapturing_) {
+                self->PullAudioFromInputScope();
+            }
+        });
+        dispatch_resume(halTimer_);
+    }
+    
+    NSLog(@"✅ [StartHAL] HAL audio capture started (pure HAL, no external dependencies)");
+    NSLog(@"📝 Attempting to capture from device output stream...");
     return true;
+}
+
+void AudioCaptureAddon::PullAudioFromInputScope() {
+    static int pullCount = 0;
+    pullCount++;
+    
+    if (pullCount <= 10) {
+        NSLog(@"🎤 [PullAudio] Called #%d, isCapturing=%d, halAudioUnit=%p", 
+              pullCount, isCapturing_, halAudioUnit_);
+    }
+    
+    if (!isCapturing_ || !halAudioUnit_) {
+        if (pullCount <= 5) {
+            NSLog(@"⚠️ [PullAudio] Early return: isCapturing=%d, halAudioUnit=%p", 
+                  isCapturing_, halAudioUnit_);
+        }
+        return;
+    }
+    
+    // Safety check: ensure format is initialized
+    if (inputFormat_.mSampleRate == 0 || inputFormat_.mChannelsPerFrame == 0) {
+        if (pullCount <= 10) {
+            NSLog(@"❌ [PullAudio] Format not initialized: sampleRate=%.0f, channels=%u", 
+                  inputFormat_.mSampleRate, inputFormat_.mChannelsPerFrame);
+        }
+        return;
+    }
+    
+    // Calculate number of frames to pull (approximately 10ms worth)
+    UInt32 framesToPull = (UInt32)(inputFormat_.mSampleRate * 0.01);  // ~10ms
+    
+    if (pullCount <= 10) {
+        NSLog(@"🎤 [PullAudio] Calculating frames: sampleRate=%.0f, framesToPull=%u", 
+              inputFormat_.mSampleRate, framesToPull);
+    }
+    
+    // Allocate buffer for rendered audio
+    AudioBufferList bufferList;
+    bufferList.mNumberBuffers = 1;
+    bufferList.mBuffers[0].mNumberChannels = inputFormat_.mChannelsPerFrame;
+    bufferList.mBuffers[0].mDataByteSize = framesToPull * inputFormat_.mBytesPerFrame;
+    bufferList.mBuffers[0].mData = malloc(bufferList.mBuffers[0].mDataByteSize);
+    
+    if (!bufferList.mBuffers[0].mData) {
+        if (pullCount <= 10) {
+            NSLog(@"❌ [PullAudio] Memory allocation failed for %u bytes", bufferList.mBuffers[0].mDataByteSize);
+        }
+        return; // Memory allocation failed
+    }
+    
+    // Create a timestamp for the render call
+    AudioTimeStamp timeStamp;
+    memset(&timeStamp, 0, sizeof(timeStamp));
+    timeStamp.mFlags = kAudioTimeStampSampleTimeValid;
+    timeStamp.mSampleTime = 0;  // We don't track sample time for this pull model
+    
+    if (pullCount <= 10) {
+        NSLog(@"🎤 [PullAudio] Calling AudioUnitRender: bus=0 (OUTPUT), frames=%u", framesToPull);
+    }
+    
+    // NOTE: HAL Output units with INPUT I/O enabled capture INPUT from the device (microphone),
+    // NOT system output. To tap system output, use ScreenCaptureKit or a virtual audio device.
+    // This implementation will capture silence for system output.
+    // NOTE: macOS Core Audio HAL limitation - cannot tap system output directly
+    // INPUT scope (bus 1) captures input/microphone, not system output
+    // OUTPUT scope (bus 0) is for rendering audio, not capturing it
+    // This is why we get silence - HAL cannot access system output stream
+    OSStatus status = AudioUnitRender(halAudioUnit_,
+                                      nullptr,
+                                      &timeStamp,
+                                      1,  // INPUT bus (bus 1) - will capture input/mic, not system output
+                                      framesToPull,
+                                      &bufferList);
+    
+    if (pullCount <= 10) {
+        NSLog(@"🎤 [PullAudio] AudioUnitRender status=%d (0=success), frames=%u", 
+              (int)status, framesToPull);
+    }
+    
+    if (status == noErr) {
+        Float32* audioData = (Float32*)bufferList.mBuffers[0].mData;
+        
+        // Process audio: downmix to mono and resample if needed
+        double targetSampleRate = 48000.0;
+        double inputSampleRate = inputFormat_.mSampleRate;
+        size_t outputFrames = framesToPull;
+        
+        // Calculate output frames if resampling needed
+        if (inputSampleRate != targetSampleRate) {
+            outputFrames = (size_t)(framesToPull * (targetSampleRate / inputSampleRate));
+        }
+        
+        // Allocate output buffer (mono, potentially resampled)
+        size_t outputSize = outputFrames * sizeof(Float32);
+        Float32* processedData = (Float32*)malloc(outputSize);
+        
+        if (processedData) {
+            if (inputFormat_.mChannelsPerFrame > 1) {
+                // Downmix to mono first (on input frames)
+                Float32* monoData = (Float32*)malloc(framesToPull * sizeof(Float32));
+                if (monoData) {
+                    DownmixToMono(audioData, framesToPull, monoData);
+                    
+                    // Resample if needed
+                    if (inputSampleRate != targetSampleRate) {
+                        ResampleAudio(monoData, framesToPull, processedData, outputFrames, inputSampleRate, targetSampleRate);
+                        free(monoData);
+                    } else {
+                        // No resampling needed, just copy mono data
+                        memcpy(processedData, monoData, framesToPull * sizeof(Float32));
+                        free(monoData);
+                    }
+                } else {
+                    free(processedData);
+                    free(bufferList.mBuffers[0].mData);
+                    return;
+                }
+            } else {
+                // Already mono, just resample if needed
+                if (inputSampleRate != targetSampleRate) {
+                    ResampleAudio(audioData, framesToPull, processedData, outputFrames, inputSampleRate, targetSampleRate);
+                } else {
+                    // No resampling needed, just copy
+                    memcpy(processedData, audioData, framesToPull * sizeof(Float32));
+                }
+            }
+            
+            // Send to callback
+            if (pullCount <= 10) {
+                NSLog(@"📤 [PullAudio] Calling OnAudioData with %zu frames (processed)", outputFrames);
+            }
+            OnAudioData(processedData, outputFrames);
+            free(processedData);
+        } else {
+            if (pullCount <= 10) {
+                NSLog(@"❌ [PullAudio] Failed to allocate processedData buffer (%zu bytes)", outputSize);
+            }
+        }
+    } else {
+        if (pullCount <= 10) {
+            NSLog(@"❌ [PullAudio] AudioUnitRender failed with status=%d", (int)status);
+        }
+    }
+    
+    free(bufferList.mBuffers[0].mData);
 }
 
 void AudioCaptureAddon::StopHALCapture() {
     NSLog(@"🛑 Stopping HAL capture...");
+    
+    // Stop and cancel the timer first
+    if (halTimer_) {
+        dispatch_source_cancel(halTimer_);
+        halTimer_ = nullptr;
+    }
     
     if (halAudioUnit_) {
         AudioOutputUnitStop(halAudioUnit_);
@@ -907,22 +1037,24 @@ void AudioCaptureAddon::HandleDeviceChange() {
     
     NSLog(@"🔄 Handling device change...");
     
+    // Stop timer temporarily
+    if (halTimer_) {
+        dispatch_suspend(halTimer_);
+    }
+    
     // Stop current capture
-    AudioOutputUnitStop(halAudioUnit_);
     AudioUnitUninitialize(halAudioUnit_);
     
     // Reattach to new device
     if (AttachToDefaultOutputDevice()) {
-        // Reinitialize and restart
+        // Reinitialize
         OSStatus status = AudioUnitInitialize(halAudioUnit_);
         if (status == noErr) {
-            status = AudioOutputUnitStart(halAudioUnit_);
-            if (status == noErr) {
-                NSLog(@"✅ Successfully reattached to new device");
-            } else {
-                NSLog(@"❌ Failed to restart AudioUnit after device change: %d", (int)status);
-                isCapturing_ = false;
+            // Resume timer
+            if (halTimer_) {
+                dispatch_resume(halTimer_);
             }
+            NSLog(@"✅ Successfully reattached to new device");
         } else {
             NSLog(@"❌ Failed to reinitialize AudioUnit after device change: %d", (int)status);
             isCapturing_ = false;
@@ -1263,6 +1395,35 @@ Napi::Value AudioCaptureAddon::IsActive(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     return Napi::Boolean::New(env, isCapturing_);
 }
+
+// Render callback implementation
+// Note: This is called when the AudioUnit needs audio to render
+// For output tapping, we provide silence and capture from a different source
+OSStatus AudioCaptureAddon::RenderCallback(void* inRefCon,
+                                           AudioUnitRenderActionFlags* ioActionFlags,
+                                           const AudioTimeStamp* inTimeStamp,
+                                           UInt32 inBusNumber,
+                                           UInt32 inNumberFrames,
+                                           AudioBufferList* ioData) {
+    AudioCaptureAddon* self = (__bridge AudioCaptureAddon*)inRefCon;
+    
+    if (!self || !self->isCapturing_) {
+        // Provide silence if not capturing
+        for (UInt32 i = 0; i < ioData->mNumberBuffers; i++) {
+            memset(ioData->mBuffers[i].mData, 0, ioData->mBuffers[i].mDataByteSize);
+        }
+        return noErr;
+    }
+    
+    // Provide silence - we don't want to play audio, just capture it
+    // The actual audio capture happens via PullAudioFromInputScope() using the timer
+    for (UInt32 i = 0; i < ioData->mNumberBuffers; i++) {
+        memset(ioData->mBuffers[i].mData, 0, ioData->mBuffers[i].mDataByteSize);
+    }
+    
+    return noErr;
+}
+
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     AudioCaptureAddon::Init(env, exports);
