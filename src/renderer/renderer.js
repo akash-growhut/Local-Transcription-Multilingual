@@ -203,20 +203,26 @@ async function startAll() {
 
     if (isElectron) {
       // In Electron: Use native audio capture module (speaker_audio_capture.mm)
-      // This uses macOS ScreenCaptureKit for automatic system audio capture
-      // No user interaction required - direct OS-level access
+      // Mode options:
+      //   - 'hal': Granola-style CoreAudio HAL capture (experimental, no screen recording icon)
+      //   - 'screencapturekit': ScreenCaptureKit (default, App Store safe, shows screen recording icon)
+      const captureMode = "hal"; // Change to "screencapturekit" to use ScreenCaptureKit
+
       const speakerResult = await window.electronAPI.startSpeakerCapture(
-        deepgramApiKey
+        deepgramApiKey,
+        { mode: captureMode }
       );
       if (!speakerResult.success) {
         console.error(`Error starting speaker: ${speakerResult.error}`);
         updateStatus("speakerStatus", "Error", "error");
       } else {
         // Native capture is handled entirely in main process
-        // Audio flows: ScreenCaptureKit → native module → main.js → Deepgram
+        // Audio flows: HAL/ScreenCaptureKit → native module → main.js → Deepgram
         // Status will be updated via onSpeakerConnected event when WebSocket is ready
+        const modeText =
+          captureMode === "hal" ? "HAL (Granola-style)" : "ScreenCaptureKit";
         console.log(
-          "✅ Native speaker capture started in Electron (using speaker_audio_capture.mm)"
+          `✅ Native speaker capture started in Electron (mode: ${modeText})`
         );
       }
     } else {

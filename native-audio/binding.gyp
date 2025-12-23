@@ -29,7 +29,9 @@
               "-framework", "Foundation",
               "-framework", "ScreenCaptureKit",
               "-framework", "AVFoundation",
-              "-framework", "CoreMedia"
+              "-framework", "CoreMedia",
+              "-framework", "CoreAudio",
+              "-framework", "AudioToolbox"
             ],
             "ENABLE_HARDENED_RUNTIME": "YES"
           },
@@ -37,7 +39,9 @@
             "-framework Foundation",
             "-framework ScreenCaptureKit",
             "-framework AVFoundation",
-            "-framework CoreMedia"
+            "-framework CoreMedia",
+            "-framework CoreAudio",
+            "-framework AudioToolbox"
           ]
         }],
         ["OS=='win'", {

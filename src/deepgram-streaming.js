@@ -109,10 +109,13 @@ function createDeepgramConnection(config) {
     if (onError) onError(err);
   });
 
-  ws.on("close", () => {
-    console.log("🔌 Deepgram WebSocket closed");
+  ws.on("close", (code, reason) => {
+    console.log("🔌 Deepgram WebSocket closed", {
+      code: code || "unknown",
+      reason: reason ? reason.toString() : "unknown",
+    });
     isConnected = false;
-    if (onClose) onClose();
+    if (onClose) onClose(code, reason);
   });
 
   ws.on("message", (msg) => {

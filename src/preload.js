@@ -10,8 +10,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Audio capture control
   startMicrophoneCapture: (apiKey) =>
     ipcRenderer.invoke("start-microphone-capture", apiKey),
-  startSpeakerCapture: (apiKey) =>
-    ipcRenderer.invoke("start-speaker-capture", apiKey),
+  startSpeakerCapture: (apiKey, options) =>
+    ipcRenderer.invoke("start-speaker-capture", apiKey, options),
   stopMicrophoneCapture: () => ipcRenderer.invoke("stop-microphone-capture"),
   stopSpeakerCapture: () => ipcRenderer.invoke("stop-speaker-capture"),
 

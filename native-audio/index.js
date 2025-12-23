@@ -14,17 +14,18 @@ try {
 }
 
 class AudioCapture {
-  constructor(callback) {
+  constructor(callback, options = {}) {
     this.capture = null;
     this.audioCallback = callback || null;
     this.isCapturing = false;
+    this.defaultOptions = options; // Store options for use in start()
   }
 
   isAvailable() {
     return nativeModule !== null;
   }
 
-  start(callback) {
+  start(callback, options) {
     if (!this.isAvailable()) {
       return {
         success: false,
@@ -34,16 +35,28 @@ class AudioCapture {
     }
 
     try {
-      // Use provided callback or stored one
-      const cb = callback || this.audioCallback;
-      if (!cb) {
-        return { success: false, error: "No callback provided" };
+      // CRITICAL: Options must be passed to constructor, not start()
+      // This ensures HAL mode is set BEFORE any ScreenCaptureKit initialization
+      // Use provided options, or fall back to options stored in constructor, or empty object
+      const captureOptions = options || this.defaultOptions || {};
+
+      // If instance doesn't exist, create it with callback AND options
+      if (!this.capture) {
+        // Use provided callback or stored one
+        const cb = callback || this.audioCallback;
+        if (!cb) {
+          return { success: false, error: "No callback provided" };
+        }
+        // Create capture instance with callback AND options
+        // Options are passed as second argument to constructor
+        this.capture = new nativeModule.AudioCapture(cb, captureOptions);
       }
 
-      // Create capture instance with callback
-      this.capture = new nativeModule.AudioCapture(cb);
-
-      const result = this.capture.start();
+      // Support options: { mode: 'hal' | 'screencapturekit' }
+      // Default is 'screencapturekit' (App Store safe)
+      // 'hal' is experimental Granola-style capture (not App Store safe)
+      // Note: Options should already be set in constructor, but we can pass them to start() too for compatibility
+      const result = this.capture.start(captureOptions);
       this.isCapturing = result;
 
       return { success: result };
