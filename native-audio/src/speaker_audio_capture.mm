@@ -2,10 +2,20 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
+#import <CoreAudio/CoreAudio.h>
+#import <AppKit/AppKit.h>
+#import <ApplicationServices/ApplicationServices.h>
 #import <objc/message.h>
 #include <napi.h>
 #include <vector>
 #include <functional>
+#include <string>
+#include <unordered_map>
+#include <atomic>
+#include <algorithm>
+#include <tuple>
+#include <unistd.h>
+#include <cctype>
 
 using namespace Napi;
 
@@ -604,8 +614,347 @@ Napi::Value AudioCaptureAddon::IsActive(const Napi::CallbackInfo& info) {
     return Napi::Boolean::New(env, isCapturing_);
 }
 
+// Known apps with confidence scores
+static std::unordered_map<std::string, double> knownApps = {
+    {"us.zoom.xos", 0.9},
+    {"com.microsoft.teams", 0.9},
+    {"com.google.Chrome", 0.8},  // Increased Chrome score
+    {"com.apple.Safari", 0.7},
+    {"com.whatsapp", 0.8},
+    {"com.skype.skype", 0.8},
+    {"com.slack.Slack", 0.7},
+    {"com.apple.FaceTime", 0.9},
+    {"com.discord", 0.8},
+    {"com.webex.meeting", 0.8},
+    {"com.loom.desktop", 0.7},
+    {"com.notion.Notion", 0.4},
+    {"com.electron", 0.1}  // Lowered Electron score - we'll filter it out anyway
+};
+
+// Check if microphone device is running
+static bool queryMicRunning(AudioObjectID dev) {
+    UInt32 val = 0;
+    UInt32 sz = sizeof(val);
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyDeviceIsRunningSomewhere,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    return (AudioObjectGetPropertyData(dev, &addr, 0, nullptr, &sz, &val) == noErr && val);
+}
+
+// Get dynamic candidates with scoring
+static std::vector<std::tuple<std::string, std::string, double>> dynamicMicCandidates() {
+    std::vector<std::tuple<std::string, std::string, double>> candidates;
+    NSArray<NSRunningApplication *> *apps = [[NSWorkspace sharedWorkspace] runningApplications];
+    
+    // Get current process PID to exclude it
+    pid_t currentPID = getpid();
+
+    for (NSRunningApplication *app in apps) {
+        if (app.activationPolicy == NSApplicationActivationPolicyProhibited) continue;
+        
+        // Skip the current Electron app process
+        if (app.processIdentifier == currentPID) {
+            continue;
+        }
+        
+        NSString *bid = app.bundleIdentifier;
+        if (!bid) continue;
+        
+        // Also skip Electron apps by bundle ID
+        std::string bundleIdStr = [bid UTF8String];
+        if (bundleIdStr.find("electron") != std::string::npos || 
+            bundleIdStr.find("com.electron") != std::string::npos) {
+            continue;
+        }
+        
+        NSString *name = app.localizedName ?: bid;
+        std::string nameStr = [name UTF8String];
+        
+        // Skip if name contains "Electron" (case insensitive check)
+        NSString *nameLower = [name lowercaseString];
+        if ([nameLower containsString:@"electron"]) {
+            continue;
+        }
+        
+        double score = knownApps.count(bundleIdStr) ? knownApps[bundleIdStr] : 0.1;
+        
+        // Boost Chrome detection
+        if (bundleIdStr == "com.google.Chrome" || nameStr.find("Chrome") != std::string::npos) {
+            score = std::max(score, 0.8);
+        }
+
+        // Check window titles for meeting-related keywords
+        AXUIElementRef appElem = AXUIElementCreateApplication(app.processIdentifier);
+        CFTypeRef value;
+        if (AXUIElementCopyAttributeValue(appElem, kAXWindowsAttribute, &value) == kAXErrorSuccess) {
+            NSArray *wins = (__bridge NSArray *)value;
+            for (id win in wins) {
+                CFTypeRef titleRef;
+                if (AXUIElementCopyAttributeValue((AXUIElementRef)win, kAXTitleAttribute, &titleRef) == kAXErrorSuccess) {
+                    NSString *title = (__bridge NSString *)titleRef;
+                    NSString *lower = [title lowercaseString];
+                    if ([lower containsString:@"meeting"] ||
+                        [lower containsString:@"call"] ||
+                        [lower containsString:@"recording"] ||
+                        [lower containsString:@"voice"] ||
+                        [lower containsString:@"conference"] ||
+                        [lower containsString:@"audio"] ||
+                        [lower containsString:@"video"] ||
+                        [lower containsString:@"google meet"] ||
+                        [lower containsString:@"zoom"] ||
+                        [lower containsString:@"teams"]) {
+                        score += 0.4;
+                        CFRelease(titleRef);
+                        break;
+                    }
+                    CFRelease(titleRef);
+                }
+            }
+            CFRelease(value);
+        }
+        CFRelease(appElem);
+
+        // Only boost active app if it's already a known audio app
+        // This prevents random apps from getting high scores just because they're active
+        if (app.isActive && knownApps.count(bundleIdStr) > 0) {
+            score += 0.15;  // Reduced from 0.2 to make it less impactful
+        }
+        if (score > 1.0) score = 1.0;
+
+        candidates.push_back({[name UTF8String], bundleIdStr, score});
+    }
+
+    std::sort(candidates.begin(), candidates.end(),
+              [](auto &a, auto &b) { return std::get<2>(a) > std::get<2>(b); });
+    return candidates;
+}
+
+// Microphone monitor class to continuously track which app is using the mic
+class MicrophoneMonitor {
+public:
+    static MicrophoneMonitor* sharedInstance() {
+        static MicrophoneMonitor* instance = nullptr;
+        if (!instance) {
+            instance = new MicrophoneMonitor();
+        }
+        return instance;
+    }
+    
+    void startMonitoring(Napi::ThreadSafeFunction callback, Napi::Env env) {
+        if (isMonitoring_) {
+            return; // Already monitoring
+        }
+        
+        isMonitoring_ = true;
+        callback_ = callback;
+        anyActive_ = false;
+        lastReportedApp_.clear();
+        
+        // Get all input audio devices
+        UInt32 sz = 0;
+        AudioObjectPropertyAddress addr = {
+            kAudioHardwarePropertyDevices,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, nullptr, &sz);
+        int n = sz / sizeof(AudioObjectID);
+        std::vector<AudioObjectID> ids(n);
+        AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr, &sz, ids.data());
+
+        micStates_.clear();
+        for (auto id : ids) {
+            // Only input devices
+            UInt32 streamSize = 0;
+            AudioObjectPropertyAddress saddr = {
+                kAudioDevicePropertyStreams,
+                kAudioDevicePropertyScopeInput,
+                kAudioObjectPropertyElementMain
+            };
+            if (AudioObjectGetPropertyDataSize(id, &saddr, 0, nullptr, &streamSize) == noErr && streamSize > 0) {
+                micStates_[id] = queryMicRunning(id);
+            }
+        }
+        
+        // Start monitoring on a background thread
+        MicrophoneMonitor* self = this;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            self->monitorLoop();
+        });
+    }
+    
+    void stopMonitoring() {
+        isMonitoring_ = false;
+        if (callback_) {
+            callback_.Release();
+            callback_ = Napi::ThreadSafeFunction();
+        }
+        micStates_.clear();
+    }
+    
+private:
+    bool isMonitoring_ = false;
+    Napi::ThreadSafeFunction callback_;
+    std::unordered_map<AudioObjectID, bool> micStates_;
+    std::atomic<bool> anyActive_{false};
+    std::string lastReportedApp_;
+    
+    void monitorLoop() {
+        while (isMonitoring_) {
+            @autoreleasepool {
+                bool anyNow = false;
+                for (auto &p : micStates_) {
+                    bool running = queryMicRunning(p.first);
+                    p.second = running;
+                    anyNow |= running;
+                }
+                
+                // Check if state changed
+                bool prev = anyActive_.exchange(anyNow);
+                
+                if (anyNow) {
+                    // Microphone is active - detect app
+                    auto candidates = dynamicMicCandidates();
+                    if (!candidates.empty()) {
+                        auto [name, bid, score] = candidates.front();
+                        std::string appNameStr = name;
+                        
+                        // Report only when mic becomes active (not if it was already active)
+                        bool shouldReport = false;
+                        if (!prev) {
+                            // Mic just became active - report the app
+                            shouldReport = true;
+                            NSLog(@"🎤 Microphone opened - detected app: %s (confidence: %.2f)", appNameStr.c_str(), score);
+                        }
+                        
+                        if (shouldReport && callback_) {
+                            lastReportedApp_ = appNameStr;
+                            callback_.NonBlockingCall([appNameStr](Napi::Env env, Napi::Function jsCallback) {
+                                if (!jsCallback.IsEmpty() && !jsCallback.IsUndefined()) {
+                                    jsCallback.Call({Napi::String::New(env, appNameStr)});
+                                }
+                            });
+                            NSLog(@"🎤 App using microphone: %s", appNameStr.c_str());
+                        }
+                    }
+                } else if (prev && !anyNow) {
+                    // Microphone just became inactive
+                    lastReportedApp_.clear();
+                    NSLog(@"🎤 Microphone became inactive");
+                }
+            }
+            
+            // Check every 1 second
+            usleep(1000000);
+        }
+    }
+    
+    void evaluate() {
+        bool nowAny = false;
+        for (auto &p : micStates_) {
+            if (p.second) {
+                nowAny = true;
+                break;
+            }
+        }
+        anyActive_.store(nowAny);
+    }
+};
+
+// Function to get app name using microphone
+Napi::Value GetMicrophoneAppName(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    
+    @autoreleasepool {
+        // Check if any microphone is active
+        UInt32 sz = 0;
+        AudioObjectPropertyAddress addr = {
+            kAudioHardwarePropertyDevices,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, nullptr, &sz);
+        int n = sz / sizeof(AudioObjectID);
+        std::vector<AudioObjectID> ids(n);
+        AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr, &sz, ids.data());
+
+        bool micActive = false;
+        for (auto id : ids) {
+            UInt32 streamSize = 0;
+            AudioObjectPropertyAddress saddr = {
+                kAudioDevicePropertyStreams,
+                kAudioDevicePropertyScopeInput,
+                kAudioObjectPropertyElementMain
+            };
+            if (AudioObjectGetPropertyDataSize(id, &saddr, 0, nullptr, &streamSize) == noErr && streamSize > 0) {
+                if (queryMicRunning(id)) {
+                    micActive = true;
+                    break;
+                }
+            }
+        }
+        
+        if (micActive) {
+            auto candidates = dynamicMicCandidates();
+            if (!candidates.empty()) {
+                auto [name, bid, score] = candidates.front();
+                NSLog(@"🎤 App using microphone detected: %s (confidence: %.2f)", name.c_str(), score);
+                return Napi::String::New(env, name);
+            }
+        }
+        
+        NSLog(@"🎤 Could not detect app using microphone");
+        return Napi::String::New(env, "Unknown");
+    }
+}
+
+// Function to start monitoring microphone usage
+Napi::Value StartMicrophoneMonitoring(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    
+    if (info.Length() < 1 || !info[0].IsFunction()) {
+        Napi::TypeError::New(env, "Expected callback function as argument")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    
+    Napi::Function callback = info[0].As<Napi::Function>();
+    Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
+        env,
+        callback,
+        "MicrophoneMonitor",
+        0,
+        1
+    );
+    
+    MicrophoneMonitor::sharedInstance()->startMonitoring(tsfn, env);
+    
+    NSLog(@"🎤 Started continuous microphone monitoring");
+    return env.Undefined();
+}
+
+// Function to stop monitoring microphone usage
+Napi::Value StopMicrophoneMonitoring(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    
+    MicrophoneMonitor::sharedInstance()->stopMonitoring();
+    
+    NSLog(@"🎤 Stopped microphone monitoring");
+    return env.Undefined();
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     AudioCaptureAddon::Init(env, exports);
+    
+    // Export the function to get microphone app name
+    exports.Set("getMicrophoneAppName", Napi::Function::New(env, GetMicrophoneAppName));
+    
+    // Export functions to start/stop continuous monitoring
+    exports.Set("startMicrophoneMonitoring", Napi::Function::New(env, StartMicrophoneMonitoring));
+    exports.Set("stopMicrophoneMonitoring", Napi::Function::New(env, StopMicrophoneMonitoring));
+    
     return exports;
 }
 

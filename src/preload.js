@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("speaker-error", (event, error) => callback(error)),
   onTranscript: (callback) =>
     ipcRenderer.on("transcript", (event, data) => callback(data)),
+  onMicrophoneAppDetected: (callback) =>
+    ipcRenderer.on("microphone-app-detected", (event, appName) => callback(appName)),
 
   // Remove listeners
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),

@@ -9,10 +9,17 @@ const { createDeepgramConnection } = require("./deepgram-streaming");
 // Try to load native audio capture module (macOS only)
 let NativeAudioCapture = null;
 let nativeAudioCapture = null;
+let getMicrophoneAppName = null;
+let startMicrophoneMonitoring = null;
+let stopMicrophoneMonitoring = null;
 
 if (process.platform === "darwin") {
   try {
-    NativeAudioCapture = require("../native-audio/index.js");
+    const nativeModule = require("../native-audio/index.js");
+    NativeAudioCapture = nativeModule;
+    getMicrophoneAppName = nativeModule.getMicrophoneAppName;
+    startMicrophoneMonitoring = nativeModule.startMicrophoneMonitoring;
+    stopMicrophoneMonitoring = nativeModule.stopMicrophoneMonitoring;
     console.log("✅ Native audio capture module loaded");
   } catch (error) {
     console.log("⚠️ Native audio capture not available:", error.message);
@@ -198,6 +205,9 @@ ipcMain.handle("start-microphone-capture", async (event, apiKey) => {
     if (!deepgramClient) {
       deepgramClient = initializeDeepgram(apiKey);
     }
+
+    // Note: Microphone monitoring is now continuous and started when app launches
+    // It will automatically detect and report any app using the microphone
 
     // Create WebSocket streaming connection for microphone
     createMicrophoneConnection(apiKey, microphoneSampleRate);
@@ -557,6 +567,21 @@ ipcMain.handle("destroy-rnnoise", async () => {
 app.whenReady().then(() => {
   createWindow();
 
+  // Start continuous microphone monitoring (macOS only)
+  if (startMicrophoneMonitoring && process.platform === "darwin") {
+    try {
+      startMicrophoneMonitoring((appName) => {
+        console.log(`🎤 App using microphone detected: ${appName}`);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("microphone-app-detected", appName);
+        }
+      });
+      console.log("✅ Continuous microphone monitoring started");
+    } catch (error) {
+      console.log("⚠️ Could not start microphone monitoring:", error.message);
+    }
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -586,5 +611,14 @@ app.on("before-quit", () => {
   if (nativeAudioCapture) {
     nativeAudioCapture.stop();
     nativeAudioCapture = null;
+  }
+  // Stop microphone monitoring
+  if (stopMicrophoneMonitoring && process.platform === "darwin") {
+    try {
+      stopMicrophoneMonitoring();
+      console.log("✅ Microphone monitoring stopped");
+    } catch (error) {
+      console.log("⚠️ Error stopping microphone monitoring:", error.message);
+    }
   }
 });

@@ -78,6 +78,13 @@ function setupEventListeners() {
     console.error("Speaker error:", error);
   });
 
+  // Listen for microphone app detection events
+  window.electronAPI.onMicrophoneAppDetected((appName) => {
+    console.log(`🎤 App using microphone detected: ${appName}`);
+    // Show notification or update UI
+    addSystemMessage(`🎤 ${appName} is using the microphone`);
+  });
+
   // NOTE: onTranscript listener already registered above (line 47-50), removing duplicate
 
   // Listen for audio capture warnings

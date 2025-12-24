@@ -29,7 +29,10 @@
               "-framework", "Foundation",
               "-framework", "ScreenCaptureKit",
               "-framework", "AVFoundation",
-              "-framework", "CoreMedia"
+              "-framework", "CoreMedia",
+              "-framework", "CoreAudio",
+              "-framework", "AppKit",
+              "-framework", "ApplicationServices"
             ],
             "ENABLE_HARDENED_RUNTIME": "YES"
           },
@@ -37,7 +40,10 @@
             "-framework Foundation",
             "-framework ScreenCaptureKit",
             "-framework AVFoundation",
-            "-framework CoreMedia"
+            "-framework CoreMedia",
+            "-framework CoreAudio",
+            "-framework AppKit",
+            "-framework ApplicationServices"
           ]
         }],
         ["OS=='win'", {
