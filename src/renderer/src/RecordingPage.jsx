@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Room, RoomEvent } from 'livekit-client'
+import { Room, RoomEvent, Track } from 'livekit-client'
 import { KrispNoiseFilter, isKrispNoiseFilterSupported } from '@livekit/krisp-noise-filter'
 import muteMicIcon from './assets/svg/muteMic.svg'
 import saveKeyIcon from './assets/svg/savekey.svg'
@@ -744,8 +744,33 @@ const RecordingPage = () => {
         await room.connect(tokenResult.wssUrl, tokenResult.token)
         console.log('✅ Connected to LiveKit room')
 
-        // Get user media and enable microphone (this will automatically publish the track)
-        await room.localParticipant.enableCameraAndMicrophone(false, true)
+        // Get user media with echo cancellation and noise suppression constraints
+        // This ensures browser-level audio processing before LiveKit/Krisp processing
+        console.log('🎤 Getting user media with audio constraints...')
+        const userMediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: false
+          }
+        })
+
+        const audioTrack = userMediaStream.getAudioTracks()[0]
+        if (!audioTrack) {
+          throw new Error('Failed to get audio track from getUserMedia')
+        }
+
+        console.log('🎤 Audio track obtained with constraints:', {
+          echoCancellation: audioTrack.getSettings().echoCancellation,
+          noiseSuppression: audioTrack.getSettings().noiseSuppression,
+          autoGainControl: audioTrack.getSettings().autoGainControl
+        })
+
+        // Publish the track to LiveKit (this will trigger LocalTrackPublished event)
+        await room.localParticipant.publishTrack(audioTrack, {
+          source: Track.Source.Microphone,
+          name: 'microphone'
+        })
         console.log('✅ Microphone track published to LiveKit')
       } catch (error) {
         console.error('Error starting microphone with LiveKit:', error)
