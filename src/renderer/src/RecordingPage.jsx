@@ -20,6 +20,7 @@ const RecordingPage = () => {
   const liveKitAudioProcessor = useRef(null)
   const liveKitKrispProcessor = useRef(null)
   const isMicrophoneMutedRef = useRef(false)
+  const audioRecordingCleanupRef = useRef(null)
 
   // React state for component values
   // Try to get API key from environment variable first, then localStorage
@@ -283,66 +284,107 @@ const RecordingPage = () => {
     }
   }, [])
 
-  // Helper function to convert Float32Array PCM data to WAV format
-  const floatTo16BitPCM = (float32Array) => {
-    const int16Array = new Int16Array(float32Array.length)
-    for (let i = 0; i < float32Array.length; i++) {
-      const s = Math.max(-1, Math.min(1, float32Array[i]))
-      int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+  // Helper function to start MediaRecorder for audio testing (5-second WebM chunks)
+  const startAudioRecording = useCallback((audioTrack) => {
+    // Clean up previous recording if exists
+    if (audioRecordingCleanupRef.current) {
+      audioRecordingCleanupRef.current()
+      audioRecordingCleanupRef.current = null
     }
-    return int16Array
-  }
 
-  // Helper function to create WAV file from PCM data
-  const createWavFile = (pcmData, sampleRate) => {
-    const length = pcmData.length
-    const buffer = new ArrayBuffer(44 + length * 2)
-    const view = new DataView(buffer)
+    if (!audioTrack || audioTrack.kind !== 'audio') {
+      console.warn('⚠️ [AUDIO TEST] Invalid audio track provided')
+      return
+    }
 
-    // WAV header
-    const writeString = (offset, string) => {
-      for (let i = 0; i < string.length; i++) {
-        view.setUint8(offset + i, string.charCodeAt(i))
+    const audioStream = new MediaStream([audioTrack])
+    console.log('💾 [AUDIO TEST] Created MediaStream from audio track:', audioStream)
+
+    // Check if MediaRecorder is supported
+    if (!MediaRecorder.isTypeSupported('audio/webm')) {
+      console.error('❌ [AUDIO TEST] MediaRecorder with audio/webm is not supported')
+      return
+    }
+
+    let mediaRecorder = null
+    let recordingInterval = null
+    let chunkCounter = 0
+
+    try {
+      // Create MediaRecorder with webm format
+      mediaRecorder = new MediaRecorder(audioStream, {
+        mimeType: 'audio/webm;codecs=opus'
+      })
+
+      const chunks = []
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data)
+        }
       }
+
+      mediaRecorder.onstop = () => {
+        // Create blob from chunks
+        const blob = new Blob(chunks, { type: 'audio/webm;codecs=opus' })
+
+        // Create download link
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
+        a.href = url
+        a.download = `mic-audio-test-${timestamp}-chunk${chunkCounter}.webm`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+
+        // Clean up
+        URL.revokeObjectURL(url)
+        chunks.length = 0
+
+        console.log(`💾 [AUDIO TEST] Saved 5-second audio chunk ${chunkCounter}`)
+      }
+
+      // Start recording
+      mediaRecorder.start()
+      console.log('💾 [AUDIO TEST] Started recording audio chunks (5-second intervals)')
+
+      // Function to stop and restart recording every 5 seconds
+      const recordChunk = () => {
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+          mediaRecorder.stop()
+          chunkCounter++
+
+          // Start a new recording immediately
+          setTimeout(() => {
+            if (audioTrack.readyState === 'live' && mediaRecorder) {
+              mediaRecorder.start()
+            }
+          }, 100)
+        }
+      }
+
+      // Set up interval to create 5-second chunks
+      recordingInterval = setInterval(recordChunk, 5000)
+
+      // Store cleanup function
+      const cleanup = () => {
+        if (recordingInterval) {
+          clearInterval(recordingInterval)
+          recordingInterval = null
+        }
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          mediaRecorder.stop()
+        }
+        console.log('💾 [AUDIO TEST] Stopped recording audio chunks')
+      }
+
+      // Store cleanup function in ref
+      audioRecordingCleanupRef.current = cleanup
+    } catch (err) {
+      console.error('❌ [AUDIO TEST] Failed to start audio recording:', err)
     }
-
-    writeString(0, 'RIFF')
-    view.setUint32(4, 36 + length * 2, true)
-    writeString(8, 'WAVE')
-    writeString(12, 'fmt ')
-    view.setUint32(16, 16, true) // Subchunk1Size
-    view.setUint16(20, 1, true) // AudioFormat (PCM)
-    view.setUint16(22, 1, true) // NumChannels
-    view.setUint32(24, sampleRate, true) // SampleRate
-    view.setUint32(28, sampleRate * 2, true) // ByteRate
-    view.setUint16(32, 2, true) // BlockAlign
-    view.setUint16(34, 16, true) // BitsPerSample
-    writeString(36, 'data')
-    view.setUint32(40, length * 2, true)
-
-    // Write PCM data
-    let offset = 44
-    for (let i = 0; i < length; i++) {
-      view.setInt16(offset, pcmData[i], true)
-      offset += 2
-    }
-
-    return buffer
-  }
-
-  // Helper function to download WAV file
-  const downloadWavFile = (buffer, filename) => {
-    const blob = new Blob([buffer], { type: 'audio/wav' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    console.log(`💾 [AUDIO TEST] Saved audio file: ${filename}`)
-  }
+  }, [])
 
   // Helper function to process audio from MediaStreamTrack and send to Deepgram
   const processAudioTrackForDeepgram = useCallback(
@@ -370,6 +412,9 @@ const RecordingPage = () => {
         console.warn('⚠️ [MIC Deepgram] No Deepgram API key available')
       }
 
+      // Start audio recording for testing (5-second WebM chunks)
+      startAudioRecording(audioTrack)
+
       // Create new AudioContext
       console.log(`🔊 [MIC Audio] Creating AudioContext at ${sampleRate}Hz`)
       liveKitAudioContext.current = new AudioContext({ sampleRate })
@@ -377,12 +422,6 @@ const RecordingPage = () => {
         new MediaStream([audioTrack])
       )
       console.log('🔊 [MIC Audio] AudioContext and source created')
-
-      // Audio recording buffer for 5-second chunks (for testing)
-      const audioRecordingBuffer = []
-      const samplesPer5Seconds = sampleRate * 5 // 5 seconds of audio
-      let totalSamples = 0
-      let fileCounter = 1
 
       // Create ScriptProcessorNode to capture audio data
       liveKitAudioProcessor.current = liveKitAudioContext.current.createScriptProcessor(4096, 1, 1)
@@ -403,41 +442,6 @@ const RecordingPage = () => {
             chunkCount++
           }
 
-          // Save audio for testing (5-second chunks)
-          const float32Copy = new Float32Array(inputData.length)
-          float32Copy.set(inputData)
-          audioRecordingBuffer.push(float32Copy)
-          totalSamples += inputData.length
-
-          // Save file every 5 seconds
-          if (totalSamples >= samplesPer5Seconds) {
-            console.log(`💾 [AUDIO TEST] Saving 5-second audio chunk (${totalSamples} samples)...`)
-
-            // Concatenate all buffered audio
-            const combinedAudio = new Float32Array(totalSamples)
-            let offset = 0
-            for (const chunk of audioRecordingBuffer) {
-              combinedAudio.set(chunk, offset)
-              offset += chunk.length
-            }
-
-            // Convert to 16-bit PCM
-            const pcmData = floatTo16BitPCM(combinedAudio)
-
-            // Create WAV file
-            const wavBuffer = createWavFile(pcmData, sampleRate)
-
-            // Download the file
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
-            const filename = `mic-audio-test-${timestamp}-chunk${fileCounter}.wav`
-            downloadWavFile(wavBuffer, filename)
-
-            // Reset buffer
-            audioRecordingBuffer.length = 0
-            totalSamples = 0
-            fileCounter++
-          }
-
           // Convert Float32Array to Int16Array
           const int16Array = new Int16Array(inputData.length)
           for (let i = 0; i < inputData.length; i++) {
@@ -453,9 +457,8 @@ const RecordingPage = () => {
       source.connect(liveKitAudioProcessor.current)
       liveKitAudioProcessor.current.connect(liveKitAudioContext.current.destination)
       console.log('🔊 [MIC Audio] Audio processing pipeline connected')
-      console.log('💾 [AUDIO TEST] Audio recording enabled - files will be saved every 5 seconds')
     },
-    [deepgramApiKey, startMicrophoneDeepgram, sendAudioToDeepgram]
+    [deepgramApiKey, startMicrophoneDeepgram, sendAudioToDeepgram, startAudioRecording]
   )
 
   // Initialize on component mount
@@ -552,6 +555,12 @@ const RecordingPage = () => {
       unsubscribeMicrophoneConnected?.()
       unsubscribeMicrophoneError?.()
       window.removeEventListener('audio-capture-warning', handleAudioWarning)
+
+      // Cleanup audio recording on unmount
+      if (audioRecordingCleanupRef.current) {
+        audioRecordingCleanupRef.current()
+        audioRecordingCleanupRef.current = null
+      }
     }
   }, [displayTranscript, addSystemMessage])
 
@@ -834,6 +843,12 @@ const RecordingPage = () => {
           console.error('Error disabling Krisp processor:', error)
         }
         liveKitKrispProcessor.current = null
+      }
+
+      // Clean up audio recording
+      if (audioRecordingCleanupRef.current) {
+        audioRecordingCleanupRef.current()
+        audioRecordingCleanupRef.current = null
       }
 
       // Stop microphone Deepgram connection
