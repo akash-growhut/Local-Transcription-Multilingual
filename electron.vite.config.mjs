@@ -53,7 +53,7 @@ export default defineConfig((command, mode) => {
         port: env.VITE_PORT || 3000,
         headers: {
           'Content-Security-Policy':
-            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src * 'self' blob: data: http: https:; font-src 'self' data:; connect-src 'self' https: wss: ws:;"
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src * 'self' blob: data: http: https:; font-src 'self' data:; connect-src 'self' https: wss: ws:;"
         },
         fs: {
           strict: false

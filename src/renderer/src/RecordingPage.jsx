@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { Room, RoomEvent } from 'livekit-client'
+import { KrispNoiseFilter, isKrispNoiseFilterSupported } from '@livekit/krisp-noise-filter'
 import muteMicIcon from './assets/svg/muteMic.svg'
 import saveKeyIcon from './assets/svg/savekey.svg'
 import speakerBubbleIcon from './assets/svg/speakerBubble.svg'
@@ -8,14 +10,16 @@ import statusItem2Icon from './assets/svg/status-item-2.svg'
 import stopRecordingIcon from './assets/svg/stopRecording.svg'
 import unmuteMicIcon from './assets/svg/unmuteMic.svg'
 import userBubbleIcon from './assets/svg/user-bubble.svg'
-// Import AudioCapture to make it available on window object
-import '../audioCapture.js'
 
 const RecordingPage = () => {
   // React refs for instance values
-  const audioCapture = useRef(null)
   const speakerTranscripts = useRef(new Map())
   const lastDisplayedText = useRef('')
+  const liveKitRoom = useRef(null)
+  const liveKitAudioContext = useRef(null)
+  const liveKitAudioProcessor = useRef(null)
+  const liveKitKrispProcessor = useRef(null)
+  const isMicrophoneMutedRef = useRef(false)
 
   // React state for component values
   const [deepgramApiKey, setDeepgramApiKey] = useState('')
@@ -32,9 +36,6 @@ const RecordingPage = () => {
   const [isRecording, setIsRecording] = useState(false)
   const [muteButtonDisabled, setMuteButtonDisabled] = useState(true)
   const [showHelpText, setShowHelpText] = useState(true)
-  const [helpText, setHelpText] = useState(
-    'Requires screen sharing permission to capture system audio.'
-  )
   const [platform, setPlatform] = useState('')
 
   // Use transcripts in dev mode to satisfy linter (stored for potential export functionality)
@@ -52,6 +53,30 @@ const RecordingPage = () => {
   const resetSpeakerTranscriptTracking = () => {
     speakerTranscripts.current.clear()
     lastDisplayedText.current = ''
+  }
+
+  const isAudioContextAvailable = () => {
+    try {
+      // Check if AudioContext is supported
+      if (
+        typeof AudioContext === 'undefined' &&
+        typeof window?.webkitAudioContext === 'undefined'
+      ) {
+        console.warn('AudioContext is not supported')
+        return false
+      }
+
+      // Check if we're in a secure context (required for AudioContext)
+      if (!window?.isSecureContext) {
+        console.warn('AudioContext requires a secure context (HTTPS or localhost)')
+        return false
+      }
+
+      return true
+    } catch (error) {
+      console.warn('AudioContext availability check failed:', error)
+      return false
+    }
   }
 
   // Function to lowercase first word if continuing from previous transcript
@@ -226,13 +251,52 @@ const RecordingPage = () => {
     }, 3000)
   }, [])
 
-  // Initialize on component mount
-  useEffect(() => {
-    // Initialize AudioCapture
-    if (window.AudioCapture) {
-      audioCapture.current = new window.AudioCapture()
+  // Helper function to process audio from MediaStreamTrack and send to Deepgram
+  const processAudioTrackForDeepgram = useCallback((audioTrack, sampleRate = 48000) => {
+    // Clean up previous audio context and processor if they exist
+    if (liveKitAudioProcessor.current) {
+      liveKitAudioProcessor.current.disconnect()
+      liveKitAudioProcessor.current = null
+    }
+    if (liveKitAudioContext.current) {
+      liveKitAudioContext.current.close().catch(console.error)
+      liveKitAudioContext.current = null
     }
 
+    // Create new AudioContext
+    liveKitAudioContext.current = new AudioContext({ sampleRate })
+    const source = liveKitAudioContext.current.createMediaStreamSource(
+      new MediaStream([audioTrack])
+    )
+
+    // Create ScriptProcessorNode to capture audio data
+    liveKitAudioProcessor.current = liveKitAudioContext.current.createScriptProcessor(4096, 1, 1)
+
+    liveKitAudioProcessor.current.onaudioprocess = (e) => {
+      if (!isMicrophoneMutedRef.current) {
+        const inputData = e.inputBuffer.getChannelData(0)
+
+        // Convert Float32Array to Int16Array
+        const int16Array = new Int16Array(inputData.length)
+        for (let i = 0; i < inputData.length; i++) {
+          const s = Math.max(-1, Math.min(1, inputData[i]))
+          int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+        }
+
+        // Convert to Uint8Array for IPC
+        const uint8Data = new Uint8Array(int16Array.buffer)
+
+        // Send audio data to Deepgram
+        window.electronAPI?.sendAudioData(uint8Data.buffer, 'microphone', sampleRate)
+      }
+    }
+
+    source.connect(liveKitAudioProcessor.current)
+    liveKitAudioProcessor.current.connect(liveKitAudioContext.current.destination)
+  }, [])
+
+  // Initialize on component mount
+  useEffect(() => {
     // Load saved API key
     const savedKey = localStorage.getItem('deepgramApiKey')
     if (savedKey) {
@@ -249,19 +313,6 @@ const RecordingPage = () => {
           ? 'Linux'
           : navigator.platform || 'Unknown'
     setPlatform(platformText)
-
-    // Check system audio support
-    if (
-      audioCapture.current &&
-      typeof audioCapture.current.checkSystemAudioSupport === 'function'
-    ) {
-      const support = audioCapture.current.checkSystemAudioSupport()
-      console.log('System audio support check:', support)
-
-      if (!support.supported) {
-        setHelpText(`⚠️ System audio capture not supported: ${support.message}`)
-      }
-    }
 
     // Setup event listeners
     const unsubscribeTranscript = window.electronAPI?.onTranscript((data) => {
@@ -386,6 +437,7 @@ const RecordingPage = () => {
 
     // Reset mute state
     setIsMicrophoneMuted(false)
+    isMicrophoneMutedRef.current = false
 
     // Clear chat messages
     setMessages([])
@@ -396,55 +448,132 @@ const RecordingPage = () => {
       setMuteButtonDisabled(false)
       setShowHelpText(false)
 
-      // Start microphone
+      // Start microphone with LiveKit
       setMicStatus({ text: 'Starting...', className: 'recording' })
 
-      // Ensure AudioCapture is initialized
-      if (!audioCapture.current) {
-        if (window.AudioCapture) {
-          audioCapture.current = new window.AudioCapture()
-        } else {
-          console.error('AudioCapture class not available on window object')
-          setMicStatus({ text: 'Error: AudioCapture not available', className: 'error' })
-          showError(
-            'AudioCapture module is not available. Please check if the native module is properly built.'
-          )
+      try {
+        // Initialize Deepgram connection for microphone
+        const micResult = await window.electronAPI?.startMicrophoneCapture(deepgramApiKey)
+        if (!micResult?.success) {
+          console.error(`Error starting microphone: ${micResult?.error || 'Unknown error'}`)
+          setMicStatus({ text: 'Error', className: 'error' })
           setIsRecording(false)
           setMuteButtonDisabled(true)
           return
         }
-      }
 
-      const micResult = await window.electronAPI?.startMicrophoneCapture(deepgramApiKey)
-      if (!micResult?.success) {
-        console.error(`Error starting microphone: ${micResult?.error || 'Unknown error'}`)
+        // Generate access token for LiveKit from main process
+        const participantIdentity = `user-${Date.now()}`
+        const tokenResult = await window.electronAPI?.generateLiveKitToken(
+          'recording-room',
+          participantIdentity,
+          'Recording User'
+        )
+
+        if (!tokenResult?.success || !tokenResult.token || !tokenResult.wssUrl) {
+          throw new Error(
+            tokenResult?.error || 'Failed to generate LiveKit token. Please check your .env file.'
+          )
+        }
+
+        // Create and connect to LiveKit room
+        const room = new Room()
+        liveKitRoom.current = room
+
+        // Set up event handler for local track published
+        room.on(RoomEvent.LocalTrackPublished, async (trackPublication) => {
+          if (trackPublication.track?.kind === 'audio') {
+            console.log('localTrackPublished livekit called', +new Date())
+            try {
+              if (!isKrispNoiseFilterSupported()) {
+                console.warn('Krisp noise filter is currently not supported on this browser')
+                // Continue without Krisp filter
+                const audioTrack = trackPublication.track?.mediaStreamTrack
+                if (audioTrack) {
+                  const settings = audioTrack.getSettings()
+                  const sampleRate = settings.sampleRate || 48000
+                  processAudioTrackForDeepgram(audioTrack, sampleRate)
+                }
+                return
+              }
+
+              // Check if audio context is available before creating the noise filter
+              if (!isAudioContextAvailable()) {
+                console.warn(
+                  'Audio context not available, skipping Krisp noise filter initialization'
+                )
+                // Continue without Krisp filter
+                const audioTrack = trackPublication.track?.mediaStreamTrack
+                if (audioTrack) {
+                  const settings = audioTrack.getSettings()
+                  const sampleRate = settings.sampleRate || 48000
+                  processAudioTrackForDeepgram(audioTrack, sampleRate)
+                }
+                return
+              }
+
+              // Ensure we have a valid audio track before proceeding
+              if (!trackPublication.track || !trackPublication.track.mediaStreamTrack) {
+                console.warn('Audio track not available for noise filter processing')
+                return
+              }
+
+              // Once instantiated, the filter will begin initializing and will download additional resources
+              const krispProcessor = KrispNoiseFilter()
+              liveKitKrispProcessor.current = krispProcessor
+
+              // Check if the processor was created successfully
+              if (!krispProcessor) {
+                console.warn('Failed to create Krisp noise filter processor')
+                // Continue without Krisp filter
+                const audioTrack = trackPublication.track?.mediaStreamTrack
+                if (audioTrack) {
+                  const settings = audioTrack.getSettings()
+                  const sampleRate = settings.sampleRate || 48000
+                  processAudioTrackForDeepgram(audioTrack, sampleRate)
+                }
+                return
+              }
+
+              await trackPublication.track?.setProcessor(krispProcessor)
+
+              // To enable/disable the noise filter, use setEnabled()
+              await krispProcessor.setEnabled(true)
+
+              const processedAudioTrack = trackPublication?.track?.mediaStreamTrack
+              if (processedAudioTrack) {
+                const settings = processedAudioTrack.getSettings()
+                const sampleRate = settings.sampleRate || 48000
+                processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
+                setMicStatus({ text: 'Recording', className: 'recording' })
+              }
+            } catch (error) {
+              console.error('Failed to initialize Krisp noise filter:', error)
+              // Continue without noise filter rather than breaking the audio
+              const audioTrack = trackPublication.track?.mediaStreamTrack
+              if (audioTrack) {
+                const settings = audioTrack.getSettings()
+                const sampleRate = settings.sampleRate || 48000
+                processAudioTrackForDeepgram(audioTrack, sampleRate)
+                setMicStatus({ text: 'Recording', className: 'recording' })
+              }
+            }
+          }
+        })
+
+        // Connect to room
+        await room.connect(tokenResult.wssUrl, tokenResult.token)
+        console.log('✅ Connected to LiveKit room')
+
+        // Create and publish microphone track
+        await room.localParticipant.enableCameraAndMicrophone(false, true)
+        console.log('✅ Microphone track published to LiveKit')
+      } catch (error) {
+        console.error('Error starting microphone with LiveKit:', error)
         setMicStatus({ text: 'Error', className: 'error' })
+        showError(`Failed to start microphone: ${error.message || error}`)
         setIsRecording(false)
         setMuteButtonDisabled(true)
-      } else {
-        try {
-          const audioResult = await audioCapture.current.startMicrophoneCapture(
-            (audioData, source, sampleRate) => {
-              window.electronAPI?.sendAudioData(audioData, source, sampleRate)
-            }
-          )
-          if (audioResult && audioResult.success) {
-            setMicStatus({ text: 'Recording', className: 'recording' })
-          } else {
-            const errorMsg = audioResult?.error || 'Unknown error starting audio capture'
-            console.error(`Error starting microphone audio: ${errorMsg}`, audioResult)
-            setMicStatus({ text: 'Error', className: 'error' })
-            showError(`Failed to start microphone audio capture: ${errorMsg}`)
-            setIsRecording(false)
-            setMuteButtonDisabled(true)
-          }
-        } catch (error) {
-          console.error('Exception starting microphone audio:', error)
-          setMicStatus({ text: 'Error', className: 'error' })
-          showError(`Exception starting microphone audio: ${error.message || error}`)
-          setIsRecording(false)
-          setMuteButtonDisabled(true)
-        }
       }
 
       // Start speaker
@@ -470,31 +599,9 @@ const RecordingPage = () => {
           )
         }
       } else {
-        // In browser: Use browser-based fallback (getDisplayMedia API)
-        // This requires user interaction to select audio source in sharing dialog
-        // Fallback path for when running in actual browser (not Electron)
-        // eslint-disable-next-line no-unused-vars
-        const audioResult = await audioCapture.current?.startSpeakerCapture((audioData, source) => {
-          // In browser, audio would need to be sent to a different endpoint
-          // This is the fallback path for non-Electron environments
-          // Parameters unused in fallback mode
-          void audioData
-          void source
-          console.log('Browser-based speaker capture (fallback mode)')
-        })
-        if (audioResult?.success) {
-          setSpeakerStatus({ text: 'Recording', className: 'recording' })
-        } else {
-          showError(
-            `Speaker capture may not work:\n\n${audioResult?.error}\n\n` +
-              `Make sure to:\n` +
-              `1. Grant screen recording permission\n` +
-              `2. Select an audio source in the sharing dialog\n` +
-              `3. Check "Share audio" or "Share system audio"\n\n` +
-              `Microphone will continue working.`
-          )
-          setSpeakerStatus({ text: 'Error', className: 'error' })
-        }
+        // Browser fallback not supported - LiveKit is required
+        console.warn('Speaker capture requires Electron environment')
+        setSpeakerStatus({ text: 'Error', className: 'error' })
       }
 
       // Check for audio after 5 seconds
@@ -524,13 +631,46 @@ const RecordingPage = () => {
   // Unified stop function - stops both microphone and speaker
   const stopAll = async () => {
     try {
+      // Stop LiveKit room and cleanup
+      if (liveKitRoom.current) {
+        try {
+          // Disable tracks
+          liveKitRoom.current.localParticipant.setMicrophoneEnabled(false)
+          // Disconnect from room
+          await liveKitRoom.current.disconnect()
+          console.log('✅ Disconnected from LiveKit room')
+        } catch (error) {
+          console.error('Error disconnecting from LiveKit:', error)
+        }
+        liveKitRoom.current = null
+      }
+
+      // Clean up audio processors
+      if (liveKitAudioProcessor.current) {
+        liveKitAudioProcessor.current.disconnect()
+        liveKitAudioProcessor.current = null
+      }
+
+      if (liveKitAudioContext.current) {
+        await liveKitAudioContext.current.close().catch(console.error)
+        liveKitAudioContext.current = null
+      }
+
+      // Clean up Krisp processor
+      if (liveKitKrispProcessor.current) {
+        try {
+          await liveKitKrispProcessor.current.setEnabled(false)
+        } catch (error) {
+          console.error('Error disabling Krisp processor:', error)
+        }
+        liveKitKrispProcessor.current = null
+      }
+
       // Stop microphone
-      audioCapture.current?.stopMicrophoneCapture()
       await window.electronAPI?.stopMicrophoneCapture()
       setMicStatus({ text: 'Ready', className: '' })
 
       // Stop speaker
-      audioCapture.current?.stopSpeakerCapture()
       await window.electronAPI?.stopSpeakerCapture()
       setSpeakerStatus({ text: 'Ready', className: '' })
 
@@ -553,11 +693,7 @@ const RecordingPage = () => {
   const toggleMute = () => {
     const newMutedState = !isMicrophoneMuted
     setIsMicrophoneMuted(newMutedState)
-
-    // Update AudioCapture mute state
-    if (audioCapture.current) {
-      audioCapture.current.setMicrophoneMuted(newMutedState)
-    }
+    isMicrophoneMutedRef.current = newMutedState
 
     // Update status
     if (newMutedState) {
@@ -664,8 +800,8 @@ const RecordingPage = () => {
             </div>
           </div>
           {showHelpText && (
-            <div className={`help-text ${helpText.includes('⚠️') ? 'error-message' : ''}`}>
-              {helpText}
+            <div className="help-text">
+              Requires screen sharing permission to capture system audio.
             </div>
           )}
         </div>

@@ -16,15 +16,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendAudioData: (audioData, source, sampleRate) =>
     ipcRenderer.invoke('send-audio-data', audioData, source, sampleRate),
 
-  // RNNoise noise cancellation
-  checkRNNoise: () => ipcRenderer.invoke('check-rnnoise'),
-  initializeRNNoise: () => ipcRenderer.invoke('initialize-rnnoise'),
-  processAudioWithRNNoise: (audioData) => ipcRenderer.invoke('process-audio-rnnoise', audioData),
-  setRNNoiseEnabled: (enabled) => ipcRenderer.invoke('set-rnnoise-enabled', enabled),
-  destroyRNNoise: () => ipcRenderer.invoke('destroy-rnnoise'),
-
   // Desktop capture
   getDesktopSources: (options) => ipcRenderer.invoke('get-desktop-sources', options),
+
+  // LiveKit credentials
+  getLiveKitCredentials: () => ipcRenderer.invoke('get-livekit-credentials'),
+  generateLiveKitToken: (roomName, participantIdentity, participantName) =>
+    ipcRenderer.invoke('generate-livekit-token', roomName, participantIdentity, participantName),
 
   // Listen for events from main process
   onMicrophoneConnected: (callback) =>

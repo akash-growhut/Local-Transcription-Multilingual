@@ -1,15 +1,13 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer } = require('electron')
 const path = require('path')
-const fs = require('fs')
-const { exec } = require('child_process')
-const https = require('https')
 const { createClient } = require('@deepgram/sdk')
 const { createDeepgramConnection } = require('./deepgram-streaming')
+const { AccessToken } = require('livekit-server-sdk')
+require('dotenv').config()
 
 // Try to load native audio capture module (macOS only)
 let NativeAudioCapture = null
 let nativeAudioCapture = null
-let getMicrophoneAppName = null
 let startMicrophoneMonitoring = null
 let stopMicrophoneMonitoring = null
 
@@ -17,26 +15,12 @@ if (process.platform === 'darwin') {
   try {
     const nativeModule = require('../native-audio/index.js')
     NativeAudioCapture = nativeModule
-    getMicrophoneAppName = nativeModule.getMicrophoneAppName
     startMicrophoneMonitoring = nativeModule.startMicrophoneMonitoring
     stopMicrophoneMonitoring = nativeModule.stopMicrophoneMonitoring
     console.log('✅ Native audio capture module loaded')
   } catch (error) {
     console.log('⚠️ Native audio capture not available:', error.message)
     console.log('   Falling back to web API method')
-  }
-}
-
-// Try to load RNNoise module for microphone noise cancellation (macOS only)
-let rnnoiseWrapper = null
-
-if (process.platform === 'darwin') {
-  try {
-    rnnoiseWrapper = require('../native-audio/rnnoise-wrapper.js')
-    console.log('✅ RNNoise wrapper loaded')
-  } catch (error) {
-    console.log('⚠️ RNNoise not available:', error.message)
-    console.log("   Microphone will use browser's built-in noise suppression")
   }
 }
 
@@ -462,7 +446,7 @@ ipcMain.handle('send-audio-data', async (event, audioData, source, sampleRate) =
 })
 
 // Get desktop sources for screen/audio capture
-ipcMain.handle('get-desktop-sources', async (event, options = {}) => {
+ipcMain.handle('get-desktop-sources', async () => {
   try {
     const sources = await desktopCapturer.getSources({
       types: ['screen', 'window'],
@@ -475,68 +459,57 @@ ipcMain.handle('get-desktop-sources', async (event, options = {}) => {
   }
 })
 
-// RNNoise handlers for microphone noise cancellation
-ipcMain.handle('check-rnnoise', async () => {
-  if (!rnnoiseWrapper) {
-    return { available: false }
-  }
-  return { available: rnnoiseWrapper.available() }
-})
-
-ipcMain.handle('initialize-rnnoise', async () => {
-  if (!rnnoiseWrapper) {
-    return { success: false, error: 'RNNoise not available' }
-  }
+// Get LiveKit credentials from environment variables
+ipcMain.handle('get-livekit-credentials', async () => {
   try {
-    const success = rnnoiseWrapper.initialize()
-    return { success }
+    return {
+      success: true,
+      wssUrl: process.env.LIVEKIT_WSS_URL || '',
+      apiKey: process.env.LIVEKIT_API_KEY || '',
+      apiSecret: process.env.LIVEKIT_API_SECRET || ''
+    }
   } catch (error) {
-    console.error('❌ Failed to initialize RNNoise:', error)
     return { success: false, error: error.message }
   }
 })
 
-ipcMain.handle('process-audio-rnnoise', async (event, audioData) => {
-  if (!rnnoiseWrapper) {
-    return audioData // Return original audio if RNNoise not available
-  }
-  try {
-    // Convert array to Float32Array
-    const float32Data = new Float32Array(audioData)
-    const processedData = rnnoiseWrapper.processFrame(float32Data)
-    // Convert back to array for IPC
-    return Array.from(processedData)
-  } catch (error) {
-    console.error('❌ RNNoise processing error:', error)
-    return audioData // Return original audio on error
-  }
-})
+// Generate LiveKit access token
+ipcMain.handle(
+  'generate-livekit-token',
+  async (event, roomName, participantIdentity, participantName) => {
+    try {
+      const apiKey = process.env.LIVEKIT_API_KEY
+      const apiSecret = process.env.LIVEKIT_API_SECRET
 
-ipcMain.handle('set-rnnoise-enabled', async (event, enabled) => {
-  if (!rnnoiseWrapper) {
-    return { success: false, error: 'RNNoise not available' }
-  }
-  try {
-    rnnoiseWrapper.setEnabled(enabled)
-    return { success: true }
-  } catch (error) {
-    console.error('❌ Failed to set RNNoise state:', error)
-    return { success: false, error: error.message }
-  }
-})
+      if (!apiKey || !apiSecret) {
+        return { success: false, error: 'LiveKit credentials not configured' }
+      }
 
-ipcMain.handle('destroy-rnnoise', async () => {
-  if (!rnnoiseWrapper) {
-    return { success: true }
+      const at = new AccessToken(apiKey, apiSecret, {
+        identity: participantIdentity || `user-${Date.now()}`,
+        name: participantName || 'Recording User'
+      })
+
+      at.addGrant({
+        room: roomName || 'recording-room',
+        roomJoin: true,
+        canPublish: true,
+        canSubscribe: false
+      })
+
+      const token = await at.toJwt()
+
+      return {
+        success: true,
+        token,
+        wssUrl: process.env.LIVEKIT_WSS_URL || ''
+      }
+    } catch (error) {
+      console.error('Error generating LiveKit token:', error)
+      return { success: false, error: error.message }
+    }
   }
-  try {
-    rnnoiseWrapper.destroy()
-    return { success: true }
-  } catch (error) {
-    console.error('❌ Failed to destroy RNNoise:', error)
-    return { success: false, error: error.message }
-  }
-})
+)
 
 app.whenReady().then(() => {
   createWindow()
