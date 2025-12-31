@@ -8,15 +8,11 @@ require('dotenv').config()
 // Try to load native audio capture module (macOS only)
 let NativeAudioCapture = null
 let nativeAudioCapture = null
-let startMicrophoneMonitoring = null
-let stopMicrophoneMonitoring = null
 
 if (process.platform === 'darwin') {
   try {
     const nativeModule = require('../native-audio/index.js')
     NativeAudioCapture = nativeModule
-    startMicrophoneMonitoring = nativeModule.startMicrophoneMonitoring
-    stopMicrophoneMonitoring = nativeModule.stopMicrophoneMonitoring
     console.log('✅ Native audio capture module loaded')
   } catch (error) {
     console.log('⚠️ Native audio capture not available:', error.message)
@@ -26,9 +22,7 @@ if (process.platform === 'darwin') {
 
 let mainWindow
 let deepgramClient
-let microphoneConnection = null
 let speakerConnection = null
-let microphoneSampleRate = 48000 // Default, will be updated when microphone starts
 let speakerAudioBuffer = [] // Buffer for audio chunks when connection isn't ready
 
 // Initialize Deepgram client (kept for backward compatibility with file-based transcription if needed)
@@ -38,60 +32,6 @@ function initializeDeepgram(apiKey) {
     return null
   }
   return createClient(apiKey)
-}
-
-// Create Deepgram WebSocket connection for microphone (streaming)
-function createMicrophoneConnection(apiKey, sampleRate = 48000) {
-  if (microphoneConnection) {
-    microphoneConnection.close()
-    microphoneConnection = null
-  }
-
-  console.log(`📡 Creating microphone Deepgram WebSocket connection (${sampleRate}Hz)`)
-
-  microphoneConnection = createDeepgramConnection({
-    apiKey,
-    language: 'multi',
-    model: 'nova-3',
-    sampleRate,
-    channels: 1,
-    interimResults: true,
-    punctuate: true,
-    smartFormat: true,
-    diarize: false,
-    type: 'microphone',
-    onTranscript: (transcript, isFinal, words) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('transcript', {
-          text: transcript,
-          isFinal,
-          source: 'microphone',
-          timestamp: Date.now(),
-          words: words
-        })
-      }
-    },
-    onError: (error) => {
-      console.error('❌ Microphone Deepgram error:', error)
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('microphone-error', error.message)
-      }
-    },
-    onOpen: () => {
-      console.log('✅ Microphone Deepgram WebSocket connected')
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('microphone-connected', true)
-      }
-    },
-    onClose: () => {
-      console.log('🔌 Microphone Deepgram WebSocket closed')
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('microphone-connected', false)
-      }
-    }
-  })
-
-  return microphoneConnection
 }
 
 // Create Deepgram WebSocket connection for speaker (streaming)
@@ -180,26 +120,6 @@ function createWindow() {
 ipcMain.handle('initialize-deepgram', async (event, apiKey) => {
   try {
     deepgramClient = initializeDeepgram(apiKey)
-    return { success: true }
-  } catch (error) {
-    return { success: false, error: error.message }
-  }
-})
-
-ipcMain.handle('start-microphone-capture', async (event, apiKey) => {
-  try {
-    // Initialize Deepgram client for backward compatibility
-    if (!deepgramClient) {
-      deepgramClient = initializeDeepgram(apiKey)
-    }
-
-    // Note: Microphone monitoring is now continuous and started when app launches
-    // It will automatically detect and report any app using the microphone
-
-    // Create WebSocket streaming connection for microphone
-    createMicrophoneConnection(apiKey, microphoneSampleRate)
-
-    console.log(`✅ Microphone WebSocket streaming initialized`)
     return { success: true }
   } catch (error) {
     return { success: false, error: error.message }
@@ -350,17 +270,6 @@ ipcMain.handle('start-speaker-capture', async (event, apiKey) => {
   }
 })
 
-ipcMain.handle('stop-microphone-capture', async () => {
-  // Close WebSocket connection
-  if (microphoneConnection) {
-    microphoneConnection.close()
-    microphoneConnection = null
-  }
-
-  console.log('✅ Microphone capture stopped')
-  return { success: true }
-})
-
 ipcMain.handle('stop-speaker-capture', async () => {
   console.log('🛑 Stopping speaker capture...')
 
@@ -394,7 +303,7 @@ ipcMain.handle('stop-speaker-capture', async () => {
   return { success: true }
 })
 
-ipcMain.handle('send-audio-data', async (event, audioData, source, sampleRate) => {
+ipcMain.handle('send-audio-data', async (event, audioData, source) => {
   try {
     // Convert ArrayBuffer to Buffer for Node.js
     const buffer = Buffer.from(audioData)
@@ -412,33 +321,7 @@ ipcMain.handle('send-audio-data', async (event, audioData, source, sampleRate) =
       return { success: true }
     }
 
-    // Handle microphone audio (continuous streaming, not batched)
-    if (source === 'microphone') {
-      // Update sample rate if provided
-      if (sampleRate && sampleRate !== microphoneSampleRate) {
-        console.log(`📊 [Microphone] Sample rate detected: ${sampleRate} Hz`)
-        microphoneSampleRate = sampleRate
-
-        // Recreate connection with new sample rate
-        if (microphoneConnection && deepgramClient) {
-          const apiKey = deepgramClient.key
-          if (apiKey) {
-            console.log(`🔄 Recreating microphone connection with ${sampleRate}Hz`)
-            createMicrophoneConnection(apiKey, sampleRate)
-          }
-        }
-      }
-
-      if (microphoneConnection && microphoneConnection.isReady()) {
-        // Convert buffer to Int16Array for streaming
-        const int16Array = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length / 2)
-
-        // Send audio continuously (even if quiet, let Deepgram handle it)
-        microphoneConnection.send(int16Array)
-      }
-      return { success: true }
-    }
-
+    // This handler only processes speaker audio
     return { success: false, error: 'Unknown source' }
   } catch (error) {
     return { success: false, error: error.message }
@@ -514,21 +397,6 @@ ipcMain.handle(
 app.whenReady().then(() => {
   createWindow()
 
-  // Start continuous microphone monitoring (macOS only)
-  if (startMicrophoneMonitoring && process.platform === 'darwin') {
-    try {
-      startMicrophoneMonitoring((appName) => {
-        console.log(`🎤 App using microphone detected: ${appName}`)
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('microphone-app-detected', appName)
-        }
-      })
-      console.log('✅ Continuous microphone monitoring started')
-    } catch (error) {
-      console.log('⚠️ Could not start microphone monitoring:', error.message)
-    }
-  }
-
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
@@ -537,9 +405,6 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  if (microphoneConnection) {
-    microphoneConnection.close()
-  }
   if (speakerConnection) {
     speakerConnection.close()
   }
@@ -549,23 +414,11 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  if (microphoneConnection) {
-    microphoneConnection.close()
-  }
   if (speakerConnection) {
     speakerConnection.close()
   }
   if (nativeAudioCapture) {
     nativeAudioCapture.stop()
     nativeAudioCapture = null
-  }
-  // Stop microphone monitoring
-  if (stopMicrophoneMonitoring && process.platform === 'darwin') {
-    try {
-      stopMicrophoneMonitoring()
-      console.log('✅ Microphone monitoring stopped')
-    } catch (error) {
-      console.log('⚠️ Error stopping microphone monitoring:', error.message)
-    }
   }
 })

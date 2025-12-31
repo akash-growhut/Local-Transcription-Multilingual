@@ -283,11 +283,10 @@ const RecordingPage = () => {
           int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff
         }
 
-        // Convert to Uint8Array for IPC
-        const uint8Data = new Uint8Array(int16Array.buffer)
-
-        // Send audio data to Deepgram
-        window.electronAPI?.sendAudioData(uint8Data.buffer, 'microphone', sampleRate)
+        // TODO: Send audio data to Deepgram
+        // Microphone audio is handled entirely in renderer - need to create Deepgram WebSocket connection here
+        // For now, audio processing is set up but not sent to Deepgram
+        // You'll need to implement Deepgram WebSocket connection in the renderer process
       }
     }
 
@@ -320,13 +319,6 @@ const RecordingPage = () => {
       displayTranscript(data.text, data.isFinal, data.source, data)
     })
 
-    const unsubscribeMicConnected = window.electronAPI?.onMicrophoneConnected((connected) => {
-      setMicStatus({
-        text: connected ? 'Recording' : 'Ready',
-        className: connected ? 'recording' : ''
-      })
-    })
-
     const unsubscribeSpeakerConnected = window.electronAPI?.onSpeakerConnected((connected) => {
       setSpeakerStatus({
         text: connected ? 'Recording' : 'Ready',
@@ -334,19 +326,9 @@ const RecordingPage = () => {
       })
     })
 
-    const unsubscribeMicError = window.electronAPI?.onMicrophoneError((error) => {
-      setMicStatus({ text: `Error: ${error}`, className: 'error' })
-      console.error('Microphone error:', error)
-    })
-
     const unsubscribeSpeakerError = window.electronAPI?.onSpeakerError((error) => {
       setSpeakerStatus({ text: `Error: ${error}`, className: 'error' })
       console.error('Speaker error:', error)
-    })
-
-    const unsubscribeMicAppDetected = window.electronAPI?.onMicrophoneAppDetected((appName) => {
-      console.log(`🎤 App using microphone detected: ${appName}`)
-      addSystemMessage(`🎤 ${appName} is using the microphone`)
     })
 
     // Listen for audio capture warnings
@@ -382,11 +364,8 @@ const RecordingPage = () => {
     // Cleanup
     return () => {
       unsubscribeTranscript?.()
-      unsubscribeMicConnected?.()
       unsubscribeSpeakerConnected?.()
-      unsubscribeMicError?.()
       unsubscribeSpeakerError?.()
-      unsubscribeMicAppDetected?.()
       window.removeEventListener('audio-capture-warning', handleAudioWarning)
     }
   }, [displayTranscript, addSystemMessage])
@@ -452,16 +431,6 @@ const RecordingPage = () => {
       setMicStatus({ text: 'Starting...', className: 'recording' })
 
       try {
-        // Initialize Deepgram connection for microphone
-        const micResult = await window.electronAPI?.startMicrophoneCapture(deepgramApiKey)
-        if (!micResult?.success) {
-          console.error(`Error starting microphone: ${micResult?.error || 'Unknown error'}`)
-          setMicStatus({ text: 'Error', className: 'error' })
-          setIsRecording(false)
-          setMuteButtonDisabled(true)
-          return
-        }
-
         // Generate access token for LiveKit from main process
         const participantIdentity = `user-${Date.now()}`
         const tokenResult = await window.electronAPI?.generateLiveKitToken(
@@ -480,7 +449,7 @@ const RecordingPage = () => {
         const room = new Room()
         liveKitRoom.current = room
 
-        // Set up event handler for local track published
+        // Set up event handler for local track published (must be before connecting)
         room.on(RoomEvent.LocalTrackPublished, async (trackPublication) => {
           if (trackPublication.track?.kind === 'audio') {
             console.log('localTrackPublished livekit called', +new Date())
@@ -488,11 +457,12 @@ const RecordingPage = () => {
               if (!isKrispNoiseFilterSupported()) {
                 console.warn('Krisp noise filter is currently not supported on this browser')
                 // Continue without Krisp filter
-                const audioTrack = trackPublication.track?.mediaStreamTrack
-                if (audioTrack) {
-                  const settings = audioTrack.getSettings()
+                const processedAudioTrack = trackPublication.track?.mediaStreamTrack
+                if (processedAudioTrack) {
+                  const settings = processedAudioTrack.getSettings()
                   const sampleRate = settings.sampleRate || 48000
-                  processAudioTrackForDeepgram(audioTrack, sampleRate)
+                  processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
+                  setMicStatus({ text: 'Recording', className: 'recording' })
                 }
                 return
               }
@@ -503,11 +473,12 @@ const RecordingPage = () => {
                   'Audio context not available, skipping Krisp noise filter initialization'
                 )
                 // Continue without Krisp filter
-                const audioTrack = trackPublication.track?.mediaStreamTrack
-                if (audioTrack) {
-                  const settings = audioTrack.getSettings()
+                const processedAudioTrack = trackPublication.track?.mediaStreamTrack
+                if (processedAudioTrack) {
+                  const settings = processedAudioTrack.getSettings()
                   const sampleRate = settings.sampleRate || 48000
-                  processAudioTrackForDeepgram(audioTrack, sampleRate)
+                  processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
+                  setMicStatus({ text: 'Recording', className: 'recording' })
                 }
                 return
               }
@@ -526,11 +497,12 @@ const RecordingPage = () => {
               if (!krispProcessor) {
                 console.warn('Failed to create Krisp noise filter processor')
                 // Continue without Krisp filter
-                const audioTrack = trackPublication.track?.mediaStreamTrack
-                if (audioTrack) {
-                  const settings = audioTrack.getSettings()
+                const processedAudioTrack = trackPublication.track?.mediaStreamTrack
+                if (processedAudioTrack) {
+                  const settings = processedAudioTrack.getSettings()
                   const sampleRate = settings.sampleRate || 48000
-                  processAudioTrackForDeepgram(audioTrack, sampleRate)
+                  processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
+                  setMicStatus({ text: 'Recording', className: 'recording' })
                 }
                 return
               }
@@ -550,22 +522,22 @@ const RecordingPage = () => {
             } catch (error) {
               console.error('Failed to initialize Krisp noise filter:', error)
               // Continue without noise filter rather than breaking the audio
-              const audioTrack = trackPublication.track?.mediaStreamTrack
-              if (audioTrack) {
-                const settings = audioTrack.getSettings()
+              const processedAudioTrack = trackPublication.track?.mediaStreamTrack
+              if (processedAudioTrack) {
+                const settings = processedAudioTrack.getSettings()
                 const sampleRate = settings.sampleRate || 48000
-                processAudioTrackForDeepgram(audioTrack, sampleRate)
+                processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                 setMicStatus({ text: 'Recording', className: 'recording' })
               }
             }
           }
         })
 
-        // Connect to room
+        // Connect to room first
         await room.connect(tokenResult.wssUrl, tokenResult.token)
         console.log('✅ Connected to LiveKit room')
 
-        // Create and publish microphone track
+        // Get user media and enable microphone (this will automatically publish the track)
         await room.localParticipant.enableCameraAndMicrophone(false, true)
         console.log('✅ Microphone track published to LiveKit')
       } catch (error) {
@@ -666,8 +638,7 @@ const RecordingPage = () => {
         liveKitKrispProcessor.current = null
       }
 
-      // Stop microphone
-      await window.electronAPI?.stopMicrophoneCapture()
+      // Stop microphone (handled by LiveKit cleanup above)
       setMicStatus({ text: 'Ready', className: '' })
 
       // Stop speaker
