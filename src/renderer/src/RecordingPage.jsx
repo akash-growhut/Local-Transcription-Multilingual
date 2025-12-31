@@ -20,6 +20,8 @@ const RecordingPage = () => {
   const liveKitAudioProcessor = useRef(null)
   const liveKitKrispProcessor = useRef(null)
   const isMicrophoneMutedRef = useRef(false)
+  const deepgramMicConnection = useRef(null)
+  const deepgramMicSampleRate = useRef(48000)
 
   // React state for component values
   const [deepgramApiKey, setDeepgramApiKey] = useState('')
@@ -251,48 +253,200 @@ const RecordingPage = () => {
     }, 3000)
   }, [])
 
-  // Helper function to process audio from MediaStreamTrack and send to Deepgram
-  const processAudioTrackForDeepgram = useCallback((audioTrack, sampleRate = 48000) => {
-    // Clean up previous audio context and processor if they exist
-    if (liveKitAudioProcessor.current) {
-      liveKitAudioProcessor.current.disconnect()
-      liveKitAudioProcessor.current = null
-    }
-    if (liveKitAudioContext.current) {
-      liveKitAudioContext.current.close().catch(console.error)
-      liveKitAudioContext.current = null
-    }
+  // Helper function to create Deepgram WebSocket connection for microphone
+  const createMicrophoneDeepgramConnection = useCallback(
+    (apiKey, sampleRate = 48000) => {
+      console.log(
+        `🔊 [MIC Deepgram] Creating microphone Deepgram WebSocket connection (${sampleRate}Hz)`
+      )
 
-    // Create new AudioContext
-    liveKitAudioContext.current = new AudioContext({ sampleRate })
-    const source = liveKitAudioContext.current.createMediaStreamSource(
-      new MediaStream([audioTrack])
-    )
-
-    // Create ScriptProcessorNode to capture audio data
-    liveKitAudioProcessor.current = liveKitAudioContext.current.createScriptProcessor(4096, 1, 1)
-
-    liveKitAudioProcessor.current.onaudioprocess = (e) => {
-      if (!isMicrophoneMutedRef.current) {
-        const inputData = e.inputBuffer.getChannelData(0)
-
-        // Convert Float32Array to Int16Array
-        const int16Array = new Int16Array(inputData.length)
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]))
-          int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff
-        }
-
-        // TODO: Send audio data to Deepgram
-        // Microphone audio is handled entirely in renderer - need to create Deepgram WebSocket connection here
-        // For now, audio processing is set up but not sent to Deepgram
-        // You'll need to implement Deepgram WebSocket connection in the renderer process
+      // Close existing connection if any
+      if (deepgramMicConnection.current) {
+        console.log('🔊 [MIC Deepgram] Closing existing connection')
+        deepgramMicConnection.current.close()
+        deepgramMicConnection.current = null
       }
+
+      deepgramMicSampleRate.current = sampleRate
+
+      // Build WebSocket URL with query parameters
+      // Note: Browser WebSocket API doesn't support custom headers, so we need to pass API key differently
+      // For Deepgram, we'll need to use token in URL or create a proxy. For now, let's try URL-based auth
+      const params = new URLSearchParams({
+        model: 'nova-3',
+        language: 'multi',
+        encoding: 'linear16',
+        sample_rate: sampleRate.toString(),
+        channels: '1',
+        interim_results: 'true',
+        punctuate: 'true',
+        smart_format: 'true',
+        diarize: 'false',
+        token: apiKey // Deepgram supports token in URL for browser usage
+      })
+
+      const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`
+      console.log(`🔊 [MIC Deepgram] Connecting to Deepgram WebSocket...`)
+      console.log(`🔊 [MIC Deepgram] Sample rate: ${sampleRate}Hz, Model: nova-3`)
+
+      // Create WebSocket connection
+      const ws = new WebSocket(wsUrl)
+      deepgramMicConnection.current = ws
+
+      ws.onopen = () => {
+        console.log('✅ [MIC Deepgram] WebSocket connected')
+        setMicStatus({ text: 'Recording', className: 'recording' })
+      }
+
+      ws.onerror = (error) => {
+        console.error('❌ [MIC Deepgram] WebSocket error:', error)
+        setMicStatus({ text: 'Deepgram Error', className: 'error' })
+      }
+
+      ws.onclose = () => {
+        console.log('🔌 [MIC Deepgram] WebSocket closed')
+        deepgramMicConnection.current = null
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          console.log('🔊 [MIC Deepgram] Received message:', data)
+
+          // Check if we have valid channel data
+          if (!data.channel) {
+            console.log('🔊 [MIC Deepgram] No channel data in message')
+            return
+          }
+
+          const alternatives = data.channel.alternatives
+          if (!alternatives || !alternatives[0]) {
+            console.log('🔊 [MIC Deepgram] No alternatives in message')
+            return
+          }
+
+          const transcript = alternatives[0].transcript
+          const isFinal = data.is_final
+
+          // Only process if we have a transcript
+          if (!transcript) {
+            console.log('🔊 [MIC Deepgram] No transcript in message')
+            return
+          }
+
+          console.log(
+            `🔊 [MIC Deepgram] ${isFinal ? 'FINAL' : 'INTERIM'} transcript: "${transcript}"`
+          )
+
+          // Display transcript
+          displayTranscript(transcript, isFinal, 'microphone')
+        } catch (error) {
+          console.error('❌ [MIC Deepgram] Error parsing message:', error)
+        }
+      }
+
+      return ws
+    },
+    [displayTranscript]
+  )
+
+  // Helper function to send audio data to Deepgram
+  const sendAudioToDeepgram = useCallback((int16Array) => {
+    if (!deepgramMicConnection.current) {
+      console.warn('⚠️ [MIC Deepgram] WebSocket connection not initialized')
+      return
     }
 
-    source.connect(liveKitAudioProcessor.current)
-    liveKitAudioProcessor.current.connect(liveKitAudioContext.current.destination)
+    const readyState = deepgramMicConnection.current.readyState
+    if (readyState !== WebSocket.OPEN) {
+      // Log only occasionally to avoid spam
+      if (Math.random() < 0.01) {
+        console.warn(
+          `⚠️ [MIC Deepgram] WebSocket not ready (state: ${readyState}), skipping audio chunk`
+        )
+      }
+      return
+    }
+
+    try {
+      // Convert Int16Array to ArrayBuffer
+      const buffer = int16Array.buffer
+      deepgramMicConnection.current.send(buffer)
+    } catch (error) {
+      console.error('❌ [MIC Deepgram] Error sending audio:', error)
+    }
   }, [])
+
+  // Helper function to process audio from MediaStreamTrack and send to Deepgram
+  const processAudioTrackForDeepgram = useCallback(
+    (audioTrack, sampleRate = 48000) => {
+      console.log(`🔊 [MIC Audio] Processing audio track with sample rate: ${sampleRate}Hz`)
+
+      // Clean up previous audio context and processor if they exist
+      if (liveKitAudioProcessor.current) {
+        console.log('🔊 [MIC Audio] Cleaning up previous audio processor')
+        liveKitAudioProcessor.current.disconnect()
+        liveKitAudioProcessor.current = null
+      }
+      if (liveKitAudioContext.current) {
+        console.log('🔊 [MIC Audio] Closing previous audio context')
+        liveKitAudioContext.current.close().catch(console.error)
+        liveKitAudioContext.current = null
+      }
+
+      // Create Deepgram connection if we have API key
+      if (deepgramApiKey) {
+        console.log('🔊 [MIC Deepgram] Creating Deepgram connection...')
+        createMicrophoneDeepgramConnection(deepgramApiKey, sampleRate)
+      } else {
+        console.warn('⚠️ [MIC Deepgram] No Deepgram API key available')
+      }
+
+      // Create new AudioContext
+      console.log(`🔊 [MIC Audio] Creating AudioContext at ${sampleRate}Hz`)
+      liveKitAudioContext.current = new AudioContext({ sampleRate })
+      const source = liveKitAudioContext.current.createMediaStreamSource(
+        new MediaStream([audioTrack])
+      )
+      console.log('🔊 [MIC Audio] AudioContext and source created')
+
+      // Create ScriptProcessorNode to capture audio data
+      liveKitAudioProcessor.current = liveKitAudioContext.current.createScriptProcessor(4096, 1, 1)
+
+      let chunkCount = 0
+      liveKitAudioProcessor.current.onaudioprocess = (e) => {
+        if (!isMicrophoneMutedRef.current) {
+          const inputData = e.inputBuffer.getChannelData(0)
+
+          // Log first few chunks for debugging
+          if (chunkCount < 3) {
+            const rms = Math.sqrt(
+              inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length
+            )
+            console.log(
+              `🔊 [MIC Audio] Chunk ${chunkCount}: ${inputData.length} samples, RMS: ${rms.toFixed(4)}`
+            )
+            chunkCount++
+          }
+
+          // Convert Float32Array to Int16Array
+          const int16Array = new Int16Array(inputData.length)
+          for (let i = 0; i < inputData.length; i++) {
+            const s = Math.max(-1, Math.min(1, inputData[i]))
+            int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+          }
+
+          // Send audio data to Deepgram
+          sendAudioToDeepgram(int16Array)
+        }
+      }
+
+      source.connect(liveKitAudioProcessor.current)
+      liveKitAudioProcessor.current.connect(liveKitAudioContext.current.destination)
+      console.log('🔊 [MIC Audio] Audio processing pipeline connected')
+    },
+    [deepgramApiKey, createMicrophoneDeepgramConnection, sendAudioToDeepgram]
+  )
 
   // Initialize on component mount
   useEffect(() => {
@@ -452,7 +606,8 @@ const RecordingPage = () => {
         // Set up event handler for local track published (must be before connecting)
         room.on(RoomEvent.LocalTrackPublished, async (trackPublication) => {
           if (trackPublication.track?.kind === 'audio') {
-            console.log('localTrackPublished livekit called', +new Date())
+            console.log('🔊 [LiveKit] localTrackPublished event fired at', new Date().toISOString())
+            console.log('🔊 [LiveKit] Track publication:', trackPublication)
             try {
               if (!isKrispNoiseFilterSupported()) {
                 console.warn('Krisp noise filter is currently not supported on this browser')
@@ -490,6 +645,7 @@ const RecordingPage = () => {
               }
 
               // Once instantiated, the filter will begin initializing and will download additional resources
+              console.log('🔊 [Krisp] Creating Krisp noise filter processor...')
               const krispProcessor = KrispNoiseFilter()
               liveKitKrispProcessor.current = krispProcessor
 
@@ -507,17 +663,23 @@ const RecordingPage = () => {
                 return
               }
 
+              console.log('🔊 [Krisp] Setting processor on track...')
               await trackPublication.track?.setProcessor(krispProcessor)
 
               // To enable/disable the noise filter, use setEnabled()
+              console.log('🔊 [Krisp] Enabling Krisp noise filter...')
               await krispProcessor.setEnabled(true)
+              console.log('✅ [Krisp] Krisp noise filter enabled')
 
               const processedAudioTrack = trackPublication?.track?.mediaStreamTrack
               if (processedAudioTrack) {
                 const settings = processedAudioTrack.getSettings()
                 const sampleRate = settings.sampleRate || 48000
+                console.log(`🔊 [Krisp] Processed audio track sample rate: ${sampleRate}Hz`)
                 processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                 setMicStatus({ text: 'Recording', className: 'recording' })
+              } else {
+                console.warn('⚠️ [Krisp] No processed audio track available')
               }
             } catch (error) {
               console.error('Failed to initialize Krisp noise filter:', error)
