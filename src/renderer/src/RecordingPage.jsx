@@ -8,6 +8,8 @@ import statusItem2Icon from './assets/svg/status-item-2.svg'
 import stopRecordingIcon from './assets/svg/stopRecording.svg'
 import unmuteMicIcon from './assets/svg/unmuteMic.svg'
 import userBubbleIcon from './assets/svg/user-bubble.svg'
+// Import AudioCapture to make it available on window object
+import '../audioCapture.js'
 
 const RecordingPage = () => {
   // React refs for instance values
@@ -396,21 +398,52 @@ const RecordingPage = () => {
 
       // Start microphone
       setMicStatus({ text: 'Starting...', className: 'recording' })
+
+      // Ensure AudioCapture is initialized
+      if (!audioCapture.current) {
+        if (window.AudioCapture) {
+          audioCapture.current = new window.AudioCapture()
+        } else {
+          console.error('AudioCapture class not available on window object')
+          setMicStatus({ text: 'Error: AudioCapture not available', className: 'error' })
+          showError(
+            'AudioCapture module is not available. Please check if the native module is properly built.'
+          )
+          setIsRecording(false)
+          setMuteButtonDisabled(true)
+          return
+        }
+      }
+
       const micResult = await window.electronAPI?.startMicrophoneCapture(deepgramApiKey)
       if (!micResult?.success) {
-        console.error(`Error starting microphone: ${micResult?.error}`)
+        console.error(`Error starting microphone: ${micResult?.error || 'Unknown error'}`)
         setMicStatus({ text: 'Error', className: 'error' })
+        setIsRecording(false)
+        setMuteButtonDisabled(true)
       } else {
-        const audioResult = await audioCapture.current?.startMicrophoneCapture(
-          (audioData, source, sampleRate) => {
-            window.electronAPI?.sendAudioData(audioData, source, sampleRate)
+        try {
+          const audioResult = await audioCapture.current.startMicrophoneCapture(
+            (audioData, source, sampleRate) => {
+              window.electronAPI?.sendAudioData(audioData, source, sampleRate)
+            }
+          )
+          if (audioResult && audioResult.success) {
+            setMicStatus({ text: 'Recording', className: 'recording' })
+          } else {
+            const errorMsg = audioResult?.error || 'Unknown error starting audio capture'
+            console.error(`Error starting microphone audio: ${errorMsg}`, audioResult)
+            setMicStatus({ text: 'Error', className: 'error' })
+            showError(`Failed to start microphone audio capture: ${errorMsg}`)
+            setIsRecording(false)
+            setMuteButtonDisabled(true)
           }
-        )
-        if (audioResult?.success) {
-          setMicStatus({ text: 'Recording', className: 'recording' })
-        } else {
-          console.error(`Error starting microphone audio: ${audioResult?.error}`)
+        } catch (error) {
+          console.error('Exception starting microphone audio:', error)
           setMicStatus({ text: 'Error', className: 'error' })
+          showError(`Exception starting microphone audio: ${error.message || error}`)
+          setIsRecording(false)
+          setMuteButtonDisabled(true)
         }
       }
 
