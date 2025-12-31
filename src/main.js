@@ -24,6 +24,8 @@ let mainWindow
 let deepgramClient
 let speakerConnection = null
 let speakerAudioBuffer = [] // Buffer for audio chunks when connection isn't ready
+let microphoneConnection = null
+let microphoneAudioBuffer = [] // Buffer for audio chunks when connection isn't ready
 
 // Initialize Deepgram client (kept for backward compatibility with file-based transcription if needed)
 function initializeDeepgram(apiKey) {
@@ -88,6 +90,61 @@ function createSpeakerConnection(apiKey) {
   })
 
   return speakerConnection
+}
+
+// Create Deepgram WebSocket connection for microphone (streaming)
+function createMicrophoneConnection(apiKey) {
+  if (microphoneConnection) {
+    microphoneConnection.close()
+    microphoneConnection = null
+  }
+
+  console.log('🎤 Creating microphone Deepgram WebSocket connection (48kHz)')
+
+  microphoneConnection = createDeepgramConnection({
+    apiKey,
+    language: 'multi',
+    model: 'nova-3',
+    sampleRate: 48000,
+    channels: 1,
+    interimResults: true,
+    punctuate: true,
+    smartFormat: true,
+    diarize: false,
+    type: 'microphone',
+    onTranscript: (transcript, isFinal, words) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('transcript', {
+          text: transcript,
+          isFinal,
+          source: 'microphone',
+          timestamp: Date.now(),
+          words: words
+        })
+      }
+    },
+    onError: (error) => {
+      console.error('❌ Microphone Deepgram error:', error)
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('microphone-error', error.message)
+      }
+    },
+    onOpen: () => {
+      console.log('✅ Microphone Deepgram WebSocket connected')
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('microphone-connected', true)
+      }
+    },
+    onClose: () => {
+      console.log('🔌 Microphone Deepgram WebSocket closed')
+      microphoneAudioBuffer = []
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('microphone-connected', false)
+      }
+    }
+  })
+
+  return microphoneConnection
 }
 
 function createWindow() {
@@ -303,25 +360,80 @@ ipcMain.handle('stop-speaker-capture', async () => {
   return { success: true }
 })
 
+ipcMain.handle('start-microphone-deepgram', async (event, apiKey) => {
+  try {
+    if (!deepgramClient) {
+      deepgramClient = initializeDeepgram(apiKey)
+    }
+
+    createMicrophoneConnection(apiKey)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('stop-microphone-deepgram', async () => {
+  console.log('🛑 Stopping microphone Deepgram connection...')
+
+  if (microphoneConnection) {
+    microphoneConnection.close()
+    microphoneConnection = null
+    console.log('✅ Microphone Deepgram connection closed')
+  }
+
+  microphoneAudioBuffer = []
+
+  console.log('✅ Microphone Deepgram stopped successfully')
+  return { success: true }
+})
+
 ipcMain.handle('send-audio-data', async (event, audioData, source) => {
   try {
     // Convert ArrayBuffer to Buffer for Node.js
     const buffer = Buffer.from(audioData)
 
-    // Handle speaker audio (continuous streaming, not batched)
     if (source === 'speaker') {
       if (speakerConnection && speakerConnection.isReady()) {
         // Convert buffer to Int16Array for streaming
         const int16Array = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length / 2)
-        console.log('Sending audio data to speaker', int16Array.length)
-
-        // Send audio continuously (even if quiet, let Deepgram handle it)
         speakerConnection.send(int16Array)
+      } else {
+        // Buffer audio if connection not ready
+        const int16Array = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length / 2)
+        if (speakerAudioBuffer.length < 50) {
+          speakerAudioBuffer.push(int16Array)
+        }
       }
       return { success: true }
     }
 
-    // This handler only processes speaker audio
+    if (source === 'microphone') {
+      if (microphoneConnection && microphoneConnection.isReady()) {
+        // Convert buffer to Int16Array for streaming
+        const int16Array = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length / 2)
+        microphoneConnection.send(int16Array)
+
+        // Flush buffered audio if any
+        if (microphoneAudioBuffer.length > 0) {
+          console.log(
+            `📤 Flushing ${microphoneAudioBuffer.length} buffered microphone audio chunks`
+          )
+          microphoneAudioBuffer.forEach((bufferedData) => {
+            microphoneConnection.send(bufferedData)
+          })
+          microphoneAudioBuffer = []
+        }
+      } else {
+        // Buffer audio if connection not ready
+        const int16Array = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length / 2)
+        if (microphoneAudioBuffer.length < 50) {
+          microphoneAudioBuffer.push(int16Array)
+        }
+      }
+      return { success: true }
+    }
+
     return { success: false, error: 'Unknown source' }
   } catch (error) {
     return { success: false, error: error.message }
@@ -408,6 +520,9 @@ app.on('window-all-closed', () => {
   if (speakerConnection) {
     speakerConnection.close()
   }
+  if (microphoneConnection) {
+    microphoneConnection.close()
+  }
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -416,6 +531,9 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   if (speakerConnection) {
     speakerConnection.close()
+  }
+  if (microphoneConnection) {
+    microphoneConnection.close()
   }
   if (nativeAudioCapture) {
     nativeAudioCapture.stop()

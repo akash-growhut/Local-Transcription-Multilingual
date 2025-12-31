@@ -10,7 +10,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startSpeakerCapture: (apiKey) => ipcRenderer.invoke('start-speaker-capture', apiKey),
   stopSpeakerCapture: () => ipcRenderer.invoke('stop-speaker-capture'),
 
-  // Send audio data to Deepgram (speaker only)
+  // Microphone Deepgram control
+  startMicrophoneDeepgram: (apiKey) => ipcRenderer.invoke('start-microphone-deepgram', apiKey),
+  stopMicrophoneDeepgram: () => ipcRenderer.invoke('stop-microphone-deepgram'),
+
+  // Send audio data to Deepgram (speaker or microphone)
   sendAudioData: (audioData, source) => ipcRenderer.invoke('send-audio-data', audioData, source),
 
   // Desktop capture
@@ -25,6 +29,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSpeakerConnected: (callback) =>
     ipcRenderer.on('speaker-connected', (event, value) => callback(value)),
   onSpeakerError: (callback) => ipcRenderer.on('speaker-error', (event, error) => callback(error)),
+  onMicrophoneConnected: (callback) =>
+    ipcRenderer.on('microphone-connected', (event, value) => callback(value)),
+  onMicrophoneError: (callback) =>
+    ipcRenderer.on('microphone-error', (event, error) => callback(error)),
   onTranscript: (callback) => ipcRenderer.on('transcript', (event, data) => callback(data)),
 
   // Remove listeners

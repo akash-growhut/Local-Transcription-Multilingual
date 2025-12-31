@@ -20,11 +20,13 @@ const RecordingPage = () => {
   const liveKitAudioProcessor = useRef(null)
   const liveKitKrispProcessor = useRef(null)
   const isMicrophoneMutedRef = useRef(false)
-  const deepgramMicConnection = useRef(null)
-  const deepgramMicSampleRate = useRef(48000)
 
   // React state for component values
-  const [deepgramApiKey, setDeepgramApiKey] = useState('')
+  // Try to get API key from environment variable first, then localStorage
+  const getApiKey = () => {
+    return import.meta.env.VITE_DEEPGRAM_API_KEY || localStorage.getItem('deepgramApiKey') || ''
+  }
+  const [deepgramApiKey, setDeepgramApiKey] = useState(getApiKey())
   // Transcripts stored for potential export functionality (not currently displayed)
   const [microphoneTranscript, setMicrophoneTranscript] = useState('')
   const [speakerTranscript, setSpeakerTranscript] = useState('')
@@ -253,125 +255,29 @@ const RecordingPage = () => {
     }, 3000)
   }, [])
 
-  // Helper function to create Deepgram WebSocket connection for microphone
-  const createMicrophoneDeepgramConnection = useCallback(
-    (apiKey, sampleRate = 48000) => {
-      console.log(
-        `🔊 [MIC Deepgram] Creating microphone Deepgram WebSocket connection (${sampleRate}Hz)`
-      )
-
-      // Close existing connection if any
-      if (deepgramMicConnection.current) {
-        console.log('🔊 [MIC Deepgram] Closing existing connection')
-        deepgramMicConnection.current.close()
-        deepgramMicConnection.current = null
-      }
-
-      deepgramMicSampleRate.current = sampleRate
-
-      // Build WebSocket URL with query parameters
-      // Note: Browser WebSocket API doesn't support custom headers, so we need to pass API key differently
-      // For Deepgram, we'll need to use token in URL or create a proxy. For now, let's try URL-based auth
-      const params = new URLSearchParams({
-        model: 'nova-3',
-        language: 'multi',
-        encoding: 'linear16',
-        sample_rate: sampleRate.toString(),
-        channels: '1',
-        interim_results: 'true',
-        punctuate: 'true',
-        smart_format: 'true',
-        diarize: 'false',
-        token: apiKey // Deepgram supports token in URL for browser usage
-      })
-
-      const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`
-      console.log(`🔊 [MIC Deepgram] Connecting to Deepgram WebSocket...`)
-      console.log(`🔊 [MIC Deepgram] Sample rate: ${sampleRate}Hz, Model: nova-3`)
-
-      // Create WebSocket connection
-      const ws = new WebSocket(wsUrl)
-      deepgramMicConnection.current = ws
-
-      ws.onopen = () => {
-        console.log('✅ [MIC Deepgram] WebSocket connected')
-        setMicStatus({ text: 'Recording', className: 'recording' })
-      }
-
-      ws.onerror = (error) => {
-        console.error('❌ [MIC Deepgram] WebSocket error:', error)
+  // Helper function to start Deepgram connection for microphone via IPC
+  const startMicrophoneDeepgram = useCallback(async (apiKey) => {
+    console.log('🔊 [MIC Deepgram] Starting microphone Deepgram connection via IPC...')
+    try {
+      const result = await window.electronAPI?.startMicrophoneDeepgram(apiKey)
+      if (result?.success) {
+        console.log('✅ [MIC Deepgram] Microphone Deepgram connection started')
+      } else {
+        console.error('❌ [MIC Deepgram] Failed to start connection:', result?.error)
         setMicStatus({ text: 'Deepgram Error', className: 'error' })
       }
+    } catch (error) {
+      console.error('❌ [MIC Deepgram] Error starting connection:', error)
+      setMicStatus({ text: 'Deepgram Error', className: 'error' })
+    }
+  }, [])
 
-      ws.onclose = () => {
-        console.log('🔌 [MIC Deepgram] WebSocket closed')
-        deepgramMicConnection.current = null
-      }
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data)
-          console.log('🔊 [MIC Deepgram] Received message:', data)
-
-          // Check if we have valid channel data
-          if (!data.channel) {
-            console.log('🔊 [MIC Deepgram] No channel data in message')
-            return
-          }
-
-          const alternatives = data.channel.alternatives
-          if (!alternatives || !alternatives[0]) {
-            console.log('🔊 [MIC Deepgram] No alternatives in message')
-            return
-          }
-
-          const transcript = alternatives[0].transcript
-          const isFinal = data.is_final
-
-          // Only process if we have a transcript
-          if (!transcript) {
-            console.log('🔊 [MIC Deepgram] No transcript in message')
-            return
-          }
-
-          console.log(
-            `🔊 [MIC Deepgram] ${isFinal ? 'FINAL' : 'INTERIM'} transcript: "${transcript}"`
-          )
-
-          // Display transcript
-          displayTranscript(transcript, isFinal, 'microphone')
-        } catch (error) {
-          console.error('❌ [MIC Deepgram] Error parsing message:', error)
-        }
-      }
-
-      return ws
-    },
-    [displayTranscript]
-  )
-
-  // Helper function to send audio data to Deepgram
+  // Helper function to send audio data to Deepgram via IPC
   const sendAudioToDeepgram = useCallback((int16Array) => {
-    if (!deepgramMicConnection.current) {
-      console.warn('⚠️ [MIC Deepgram] WebSocket connection not initialized')
-      return
-    }
-
-    const readyState = deepgramMicConnection.current.readyState
-    if (readyState !== WebSocket.OPEN) {
-      // Log only occasionally to avoid spam
-      if (Math.random() < 0.01) {
-        console.warn(
-          `⚠️ [MIC Deepgram] WebSocket not ready (state: ${readyState}), skipping audio chunk`
-        )
-      }
-      return
-    }
-
     try {
-      // Convert Int16Array to ArrayBuffer
+      // Convert Int16Array to ArrayBuffer for IPC
       const buffer = int16Array.buffer
-      deepgramMicConnection.current.send(buffer)
+      window.electronAPI?.sendAudioData(buffer, 'microphone')
     } catch (error) {
       console.error('❌ [MIC Deepgram] Error sending audio:', error)
     }
@@ -394,10 +300,10 @@ const RecordingPage = () => {
         liveKitAudioContext.current = null
       }
 
-      // Create Deepgram connection if we have API key
+      // Start Deepgram connection via IPC if we have API key
       if (deepgramApiKey) {
-        console.log('🔊 [MIC Deepgram] Creating Deepgram connection...')
-        createMicrophoneDeepgramConnection(deepgramApiKey, sampleRate)
+        console.log('🔊 [MIC Deepgram] Starting Deepgram connection via IPC...')
+        startMicrophoneDeepgram(deepgramApiKey)
       } else {
         console.warn('⚠️ [MIC Deepgram] No Deepgram API key available')
       }
@@ -445,16 +351,20 @@ const RecordingPage = () => {
       liveKitAudioProcessor.current.connect(liveKitAudioContext.current.destination)
       console.log('🔊 [MIC Audio] Audio processing pipeline connected')
     },
-    [deepgramApiKey, createMicrophoneDeepgramConnection, sendAudioToDeepgram]
+    [deepgramApiKey, startMicrophoneDeepgram, sendAudioToDeepgram]
   )
 
   // Initialize on component mount
   useEffect(() => {
-    // Load saved API key
-    const savedKey = localStorage.getItem('deepgramApiKey')
-    if (savedKey) {
-      setDeepgramApiKey(savedKey)
-      window.electronAPI?.initializeDeepgram(savedKey)
+    // Load API key from environment variable or localStorage
+    const apiKey = getApiKey()
+    if (apiKey) {
+      setDeepgramApiKey(apiKey)
+      // Save to localStorage if it came from environment variable
+      if (import.meta.env.VITE_DEEPGRAM_API_KEY && !localStorage.getItem('deepgramApiKey')) {
+        localStorage.setItem('deepgramApiKey', apiKey)
+      }
+      window.electronAPI?.initializeDeepgram(apiKey)
     }
 
     // Update platform info
@@ -483,6 +393,21 @@ const RecordingPage = () => {
     const unsubscribeSpeakerError = window.electronAPI?.onSpeakerError((error) => {
       setSpeakerStatus({ text: `Error: ${error}`, className: 'error' })
       console.error('Speaker error:', error)
+    })
+
+    const unsubscribeMicrophoneConnected = window.electronAPI?.onMicrophoneConnected(
+      (connected) => {
+        console.log('🔊 [MIC Deepgram] Connection status:', connected)
+        setMicStatus({
+          text: connected ? 'Recording' : 'Ready',
+          className: connected ? 'recording' : ''
+        })
+      }
+    )
+
+    const unsubscribeMicrophoneError = window.electronAPI?.onMicrophoneError((error) => {
+      console.error('🔊 [MIC Deepgram] Error:', error)
+      setMicStatus({ text: `Error: ${error}`, className: 'error' })
     })
 
     // Listen for audio capture warnings
@@ -520,6 +445,8 @@ const RecordingPage = () => {
       unsubscribeTranscript?.()
       unsubscribeSpeakerConnected?.()
       unsubscribeSpeakerError?.()
+      unsubscribeMicrophoneConnected?.()
+      unsubscribeMicrophoneError?.()
       window.removeEventListener('audio-capture-warning', handleAudioWarning)
     }
   }, [displayTranscript, addSystemMessage])
@@ -800,7 +727,8 @@ const RecordingPage = () => {
         liveKitKrispProcessor.current = null
       }
 
-      // Stop microphone (handled by LiveKit cleanup above)
+      // Stop microphone Deepgram connection
+      await window.electronAPI?.stopMicrophoneDeepgram()
       setMicStatus({ text: 'Ready', className: '' })
 
       // Stop speaker
