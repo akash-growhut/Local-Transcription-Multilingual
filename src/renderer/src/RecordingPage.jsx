@@ -283,9 +283,71 @@ const RecordingPage = () => {
     }
   }, [])
 
+  // Helper function to convert Float32Array PCM data to WAV format
+  const floatTo16BitPCM = (float32Array) => {
+    const int16Array = new Int16Array(float32Array.length)
+    for (let i = 0; i < float32Array.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32Array[i]))
+      int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+    }
+    return int16Array
+  }
+
+  // Helper function to create WAV file from PCM data
+  const createWavFile = (pcmData, sampleRate) => {
+    const length = pcmData.length
+    const buffer = new ArrayBuffer(44 + length * 2)
+    const view = new DataView(buffer)
+
+    // WAV header
+    const writeString = (offset, string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i))
+      }
+    }
+
+    writeString(0, 'RIFF')
+    view.setUint32(4, 36 + length * 2, true)
+    writeString(8, 'WAVE')
+    writeString(12, 'fmt ')
+    view.setUint32(16, 16, true) // Subchunk1Size
+    view.setUint16(20, 1, true) // AudioFormat (PCM)
+    view.setUint16(22, 1, true) // NumChannels
+    view.setUint32(24, sampleRate, true) // SampleRate
+    view.setUint32(28, sampleRate * 2, true) // ByteRate
+    view.setUint16(32, 2, true) // BlockAlign
+    view.setUint16(34, 16, true) // BitsPerSample
+    writeString(36, 'data')
+    view.setUint32(40, length * 2, true)
+
+    // Write PCM data
+    let offset = 44
+    for (let i = 0; i < length; i++) {
+      view.setInt16(offset, pcmData[i], true)
+      offset += 2
+    }
+
+    return buffer
+  }
+
+  // Helper function to download WAV file
+  const downloadWavFile = (buffer, filename) => {
+    const blob = new Blob([buffer], { type: 'audio/wav' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    console.log(`💾 [AUDIO TEST] Saved audio file: ${filename}`)
+  }
+
   // Helper function to process audio from MediaStreamTrack and send to Deepgram
   const processAudioTrackForDeepgram = useCallback(
     (audioTrack, sampleRate = 48000) => {
+      console.log({ audioTrack, sampleRate })
       console.log(`🔊 [MIC Audio] Processing audio track with sample rate: ${sampleRate}Hz`)
 
       // Clean up previous audio context and processor if they exist
@@ -316,6 +378,12 @@ const RecordingPage = () => {
       )
       console.log('🔊 [MIC Audio] AudioContext and source created')
 
+      // Audio recording buffer for 5-second chunks (for testing)
+      const audioRecordingBuffer = []
+      const samplesPer5Seconds = sampleRate * 5 // 5 seconds of audio
+      let totalSamples = 0
+      let fileCounter = 1
+
       // Create ScriptProcessorNode to capture audio data
       liveKitAudioProcessor.current = liveKitAudioContext.current.createScriptProcessor(4096, 1, 1)
 
@@ -335,6 +403,41 @@ const RecordingPage = () => {
             chunkCount++
           }
 
+          // Save audio for testing (5-second chunks)
+          const float32Copy = new Float32Array(inputData.length)
+          float32Copy.set(inputData)
+          audioRecordingBuffer.push(float32Copy)
+          totalSamples += inputData.length
+
+          // Save file every 5 seconds
+          if (totalSamples >= samplesPer5Seconds) {
+            console.log(`💾 [AUDIO TEST] Saving 5-second audio chunk (${totalSamples} samples)...`)
+
+            // Concatenate all buffered audio
+            const combinedAudio = new Float32Array(totalSamples)
+            let offset = 0
+            for (const chunk of audioRecordingBuffer) {
+              combinedAudio.set(chunk, offset)
+              offset += chunk.length
+            }
+
+            // Convert to 16-bit PCM
+            const pcmData = floatTo16BitPCM(combinedAudio)
+
+            // Create WAV file
+            const wavBuffer = createWavFile(pcmData, sampleRate)
+
+            // Download the file
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
+            const filename = `mic-audio-test-${timestamp}-chunk${fileCounter}.wav`
+            downloadWavFile(wavBuffer, filename)
+
+            // Reset buffer
+            audioRecordingBuffer.length = 0
+            totalSamples = 0
+            fileCounter++
+          }
+
           // Convert Float32Array to Int16Array
           const int16Array = new Int16Array(inputData.length)
           for (let i = 0; i < inputData.length; i++) {
@@ -350,6 +453,7 @@ const RecordingPage = () => {
       source.connect(liveKitAudioProcessor.current)
       liveKitAudioProcessor.current.connect(liveKitAudioContext.current.destination)
       console.log('🔊 [MIC Audio] Audio processing pipeline connected')
+      console.log('💾 [AUDIO TEST] Audio recording enabled - files will be saved every 5 seconds')
     },
     [deepgramApiKey, startMicrophoneDeepgram, sendAudioToDeepgram]
   )
@@ -543,6 +647,7 @@ const RecordingPage = () => {
                 if (processedAudioTrack) {
                   const settings = processedAudioTrack.getSettings()
                   const sampleRate = settings.sampleRate || 48000
+                  console.log('processAudioTrackForDeepgram: 1')
                   processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                   setMicStatus({ text: 'Recording', className: 'recording' })
                 }
@@ -559,6 +664,7 @@ const RecordingPage = () => {
                 if (processedAudioTrack) {
                   const settings = processedAudioTrack.getSettings()
                   const sampleRate = settings.sampleRate || 48000
+                  console.log('processAudioTrackForDeepgram: 2')
                   processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                   setMicStatus({ text: 'Recording', className: 'recording' })
                 }
@@ -584,6 +690,7 @@ const RecordingPage = () => {
                 if (processedAudioTrack) {
                   const settings = processedAudioTrack.getSettings()
                   const sampleRate = settings.sampleRate || 48000
+                  console.log('processAudioTrackForDeepgram: 3')
                   processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                   setMicStatus({ text: 'Recording', className: 'recording' })
                 }
@@ -603,6 +710,7 @@ const RecordingPage = () => {
                 const settings = processedAudioTrack.getSettings()
                 const sampleRate = settings.sampleRate || 48000
                 console.log(`🔊 [Krisp] Processed audio track sample rate: ${sampleRate}Hz`)
+                console.log('processAudioTrackForDeepgram: 4')
                 processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                 setMicStatus({ text: 'Recording', className: 'recording' })
               } else {
@@ -615,6 +723,7 @@ const RecordingPage = () => {
               if (processedAudioTrack) {
                 const settings = processedAudioTrack.getSettings()
                 const sampleRate = settings.sampleRate || 48000
+                console.log('processAudioTrackForDeepgram: 5')
                 processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                 setMicStatus({ text: 'Recording', className: 'recording' })
               }
