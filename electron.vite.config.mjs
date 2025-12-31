@@ -7,10 +7,20 @@ export default defineConfig((command, mode) => {
   const env = { ...loadEnv(mode, cwd, 'VITE_') }
   return {
     main: {
-      plugins: [externalizeDepsPlugin()]
+      plugins: [externalizeDepsPlugin()],
+      build: {
+        rollupOptions: {
+          input: resolve(__dirname, 'src/main.js')
+        }
+      }
     },
     preload: {
-      plugins: [externalizeDepsPlugin()]
+      plugins: [externalizeDepsPlugin()],
+      build: {
+        rollupOptions: {
+          input: resolve(__dirname, 'src/preload.js')
+        }
+      }
     },
     renderer: {
       build: {
@@ -22,9 +32,7 @@ export default defineConfig((command, mode) => {
           },
           output: {
             manualChunks: {
-              livekit: ['livekit-client', '@livekit/components-react'],
-              documents: ['react-pdf', 'pdfjs-dist'],
-              workspace: ['framer-motion']
+              livekit: ['livekit-client']
             }
           }
         },
@@ -44,10 +52,17 @@ export default defineConfig((command, mode) => {
       server: {
         port: env.VITE_PORT || 3000,
         headers: {
-          'Content-Security-Policy': "img-src * 'self' blob: data: http: https:;"
+          'Content-Security-Policy':
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src * 'self' blob: data: http: https:; font-src 'self' data:; connect-src 'self' https: wss: ws:;"
+        },
+        fs: {
+          strict: false
         }
       },
-      publicDir: 'src/renderer'
+      publicDir: 'src/renderer',
+      optimizeDeps: {
+        include: ['react', 'react-dom']
+      }
     }
   }
 })

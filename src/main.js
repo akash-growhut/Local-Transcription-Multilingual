@@ -179,11 +179,16 @@ function createWindow() {
     }
   })
 
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
-
-  // Open DevTools in development
-  if (process.argv.includes('--dev')) {
+  // Load from Vite dev server in development, or from built files in production
+  const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development'
+  if (isDev) {
+    // In development, load from Vite dev server (default port 3000 from electron.vite.config.mjs)
+    const port = process.env.VITE_PORT || 3000
+    mainWindow.loadURL(`http://localhost:${port}`)
     mainWindow.webContents.openDevTools()
+  } else {
+    // In production, load from built files
+    mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
   }
 }
 
