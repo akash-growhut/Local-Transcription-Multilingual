@@ -53,13 +53,13 @@ This will create `build/Release/speaker_audio_capture.node`
 ## Usage
 
 ```javascript
-const AudioCapture = require("./native-audio");
-const capture = new AudioCapture();
+const AudioCapture = require('./native-audio')
+const capture = new AudioCapture()
 
 if (capture.isAvailable()) {
   capture.start((audioData) => {
     // Process audio data
-  });
+  })
 }
 ```
 

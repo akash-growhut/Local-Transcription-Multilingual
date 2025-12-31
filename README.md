@@ -27,6 +27,7 @@ The app follows a three-layer architecture:
 ## Installation
 
 1. Install dependencies:
+
 ```bash
 npm install
 ```
@@ -34,6 +35,7 @@ npm install
 ## Usage
 
 1. Start the application:
+
 ```bash
 npm start
 ```
@@ -45,11 +47,13 @@ npm start
 ## System Audio Capture Notes
 
 ### macOS
+
 - **macOS 13+**: Uses ScreenCaptureKit (requires screen recording permission)
 - **macOS <13**: Requires BlackHole virtual audio device as fallback
 - The current implementation uses `getDisplayMedia` which requires user interaction
 
 ### Windows
+
 - Uses WASAPI Loopback (requires native module for full implementation)
 - Current implementation uses `getDisplayMedia` as a fallback
 
@@ -81,6 +85,7 @@ The current implementation provides a foundation that can be extended with nativ
 ## Development
 
 Run in development mode with DevTools:
+
 ```bash
 npm run dev
 ```
@@ -88,6 +93,7 @@ npm run dev
 ## Building
 
 Build the application:
+
 ```bash
 npm run build
 ```
@@ -95,4 +101,3 @@ npm run build
 ## License
 
 ISC
-

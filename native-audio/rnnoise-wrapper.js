@@ -1,24 +1,24 @@
 // JavaScript wrapper for RNNoise native module
-let rnnoiseModule = null;
+let rnnoiseModule = null
 
 try {
-  if (process.platform === "darwin") {
-    rnnoiseModule = require("./build/Release/rnnoise.node");
-    console.log("✅ RNNoise module loaded successfully");
+  if (process.platform === 'darwin') {
+    rnnoiseModule = require('./build/Release/rnnoise.node')
+    console.log('✅ RNNoise module loaded successfully')
   } else {
-    console.log("⚠️ RNNoise currently only supported on macOS");
+    console.log('⚠️ RNNoise currently only supported on macOS')
   }
 } catch (error) {
-  console.warn("⚠️ RNNoise native module not available:", error.message);
-  console.warn("   Microphone will work without noise cancellation");
-  console.warn("   To build RNNoise: cd native-audio && npm run rebuild");
+  console.warn('⚠️ RNNoise native module not available:', error.message)
+  console.warn('   Microphone will work without noise cancellation')
+  console.warn('   To build RNNoise: cd native-audio && npm run rebuild')
 }
 
 class RNNoiseWrapper {
   constructor() {
-    this.processor = null;
-    this.isAvailable = rnnoiseModule !== null;
-    this.enabled = true;
+    this.processor = null
+    this.isAvailable = rnnoiseModule !== null
+    this.enabled = true
   }
 
   /**
@@ -26,7 +26,7 @@ class RNNoiseWrapper {
    * @returns {boolean} True if RNNoise module is loaded
    */
   available() {
-    return this.isAvailable;
+    return this.isAvailable
   }
 
   /**
@@ -35,17 +35,17 @@ class RNNoiseWrapper {
    */
   initialize() {
     if (!this.isAvailable) {
-      console.log("⚠️ RNNoise not available, skipping initialization");
-      return false;
+      console.log('⚠️ RNNoise not available, skipping initialization')
+      return false
     }
 
     try {
-      this.processor = new rnnoiseModule.RNNoiseProcessor();
-      console.log("✅ RNNoise processor initialized");
-      return true;
+      this.processor = new rnnoiseModule.RNNoiseProcessor()
+      console.log('✅ RNNoise processor initialized')
+      return true
     } catch (error) {
-      console.error("❌ Failed to initialize RNNoise:", error.message);
-      return false;
+      console.error('❌ Failed to initialize RNNoise:', error.message)
+      return false
     }
   }
 
@@ -57,14 +57,14 @@ class RNNoiseWrapper {
   processFrame(audioData) {
     if (!this.processor || !this.enabled) {
       // Return original audio if processor not available or disabled
-      return audioData;
+      return audioData
     }
 
     try {
-      return this.processor.processFrame(audioData);
+      return this.processor.processFrame(audioData)
     } catch (error) {
-      console.error("❌ Error processing audio frame:", error.message);
-      return audioData;
+      console.error('❌ Error processing audio frame:', error.message)
+      return audioData
     }
   }
 
@@ -73,15 +73,13 @@ class RNNoiseWrapper {
    * @param {boolean} enabled - True to enable, false to disable
    */
   setEnabled(enabled) {
-    this.enabled = enabled;
+    this.enabled = enabled
     if (this.processor) {
       try {
-        this.processor.setEnabled(enabled);
-        console.log(
-          `🎤 Noise cancellation ${enabled ? "enabled" : "disabled"}`
-        );
+        this.processor.setEnabled(enabled)
+        console.log(`🎤 Noise cancellation ${enabled ? 'enabled' : 'disabled'}`)
       } catch (error) {
-        console.error("❌ Error setting RNNoise state:", error.message);
+        console.error('❌ Error setting RNNoise state:', error.message)
       }
     }
   }
@@ -93,12 +91,12 @@ class RNNoiseWrapper {
   isEnabled() {
     if (this.processor) {
       try {
-        return this.processor.isEnabled();
+        return this.processor.isEnabled()
       } catch (error) {
-        return this.enabled;
+        return this.enabled
       }
     }
-    return this.enabled;
+    return this.enabled
   }
 
   /**
@@ -107,10 +105,10 @@ class RNNoiseWrapper {
   reset() {
     if (this.processor) {
       try {
-        this.processor.reset();
-        console.log("🔄 RNNoise processor reset");
+        this.processor.reset()
+        console.log('🔄 RNNoise processor reset')
       } catch (error) {
-        console.error("❌ Error resetting RNNoise:", error.message);
+        console.error('❌ Error resetting RNNoise:', error.message)
       }
     }
   }
@@ -120,8 +118,8 @@ class RNNoiseWrapper {
    */
   destroy() {
     if (this.processor) {
-      this.processor = null;
-      console.log("🔴 RNNoise processor destroyed");
+      this.processor = null
+      console.log('🔴 RNNoise processor destroyed')
     }
   }
 
@@ -130,7 +128,7 @@ class RNNoiseWrapper {
    * @returns {number} Frame size in samples (typically 480 for 10ms at 48kHz)
    */
   getFrameSize() {
-    return rnnoiseModule ? rnnoiseModule.FRAME_SIZE : 480;
+    return rnnoiseModule ? rnnoiseModule.FRAME_SIZE : 480
   }
 
   /**
@@ -138,12 +136,12 @@ class RNNoiseWrapper {
    * @returns {number} Sample rate in Hz (48000)
    */
   getSampleRate() {
-    return rnnoiseModule ? rnnoiseModule.SAMPLE_RATE : 48000;
+    return rnnoiseModule ? rnnoiseModule.SAMPLE_RATE : 48000
   }
 }
 
 // Export singleton instance
-const rnnoiseWrapper = new RNNoiseWrapper();
+const rnnoiseWrapper = new RNNoiseWrapper()
 
-module.exports = rnnoiseWrapper;
-module.exports.RNNoiseWrapper = RNNoiseWrapper;
+module.exports = rnnoiseWrapper
+module.exports.RNNoiseWrapper = RNNoiseWrapper
