@@ -84,6 +84,22 @@ const RecordingPage = () => {
     }
   }
 
+  // Helper function to check if track is processed
+  const isTrackProcessed = (trackPublication) => {
+    const processor = trackPublication?.track?.processor
+    const hasProcessor = processor !== undefined
+    const processedTrack = trackPublication?.track?.mediaStreamTrack
+    const isProcessed = hasProcessor && processor?.processedTrack !== undefined
+
+    return {
+      isProcessed,
+      hasProcessor,
+      processor,
+      processedTrack,
+      processorType: processor?.constructor?.name
+    }
+  }
+
   // Function to lowercase first word if continuing from previous transcript
   const adjustCapitalization = (text, previousText) => {
     if (!previousText) {
@@ -333,7 +349,7 @@ const RecordingPage = () => {
         const a = document.createElement('a')
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
         a.href = url
-        a.download = `mic-audio-test-${timestamp}-chunk${chunkCounter}.webm`
+        a.download = `1-mic-audio-test-${timestamp}-chunk${chunkCounter}.webm`
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
@@ -645,6 +661,10 @@ const RecordingPage = () => {
 
         // Set up event handler for local track published (must be before connecting)
         room.on(RoomEvent.LocalTrackPublished, async (trackPublication) => {
+          console.log(
+            '🔊 [LiveKit] ALL localTrackPublished event fired at',
+            new Date().toISOString()
+          )
           if (trackPublication.track?.kind === 'audio') {
             console.log('🔊 [LiveKit] localTrackPublished event fired at', new Date().toISOString())
             console.log('🔊 [LiveKit] Track publication:', trackPublication)
@@ -714,11 +734,49 @@ const RecordingPage = () => {
               await krispProcessor.setEnabled(true)
               console.log('✅ [Krisp] Krisp noise filter enabled')
 
+              // Wait a bit for processor to initialize and create processedTrack
+              await new Promise((resolve) => setTimeout(resolve, 500))
+
+              // Check if track is processed
+              let processCheck = isTrackProcessed(trackPublication)
+              console.log('🔊 [Krisp] Process check:', {
+                isProcessed: processCheck.isProcessed,
+                hasProcessor: processCheck.hasProcessor,
+                processorType: processCheck.processorType,
+                processedTrackAvailable: !!processCheck.processor?.processedTrack
+              })
+
+              if (!processCheck.isProcessed) {
+                console.warn('⚠️ [Krisp] Track does not appear to be processed yet, waiting...')
+                // Wait a bit more for processor to initialize
+                await new Promise((resolve) => setTimeout(resolve, 1000))
+
+                // Check again
+                processCheck = isTrackProcessed(trackPublication)
+                console.log('🔊 [Krisp] Process check (retry):', {
+                  isProcessed: processCheck.isProcessed,
+                  hasProcessor: processCheck.hasProcessor,
+                  processorType: processCheck.processorType,
+                  processedTrackAvailable: !!processCheck.processor?.processedTrack
+                })
+              }
+
+              // Get the processed track - mediaStreamTrack getter returns processor.processedTrack if available
               const processedAudioTrack = trackPublication?.track?.mediaStreamTrack
               if (processedAudioTrack) {
                 const settings = processedAudioTrack.getSettings()
                 const sampleRate = settings.sampleRate || 48000
+                console.log(
+                  `🔊 [Krisp] Using ${processCheck.isProcessed ? 'PROCESSED' : 'original'} audio track`
+                )
                 console.log(`🔊 [Krisp] Processed audio track sample rate: ${sampleRate}Hz`)
+                console.log('🔊 [Krisp] Track settings:', {
+                  echoCancellation: settings.echoCancellation,
+                  noiseSuppression: settings.noiseSuppression,
+                  autoGainControl: settings.autoGainControl,
+                  trackId: processedAudioTrack.id,
+                  trackLabel: processedAudioTrack.label
+                })
                 console.log('processAudioTrackForDeepgram: 4')
                 processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                 setMicStatus({ text: 'Recording', className: 'recording' })
