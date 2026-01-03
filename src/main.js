@@ -13,10 +13,8 @@ if (process.platform === 'darwin') {
   try {
     const nativeModule = require('../native-audio/index.js')
     NativeAudioCapture = nativeModule
-    console.log('✅ Native audio capture module loaded')
   } catch (error) {
-    console.log('⚠️ Native audio capture not available:', error.message)
-    console.log('   Falling back to web API method')
+    //
   }
 }
 
@@ -42,8 +40,6 @@ function createSpeakerConnection(apiKey) {
     speakerConnection.close()
     speakerConnection = null
   }
-
-  console.log('📡 Creating speaker Deepgram WebSocket connection (48kHz)')
 
   speakerConnection = createDeepgramConnection({
     apiKey,
@@ -74,13 +70,11 @@ function createSpeakerConnection(apiKey) {
       }
     },
     onOpen: () => {
-      console.log('✅ Speaker Deepgram WebSocket connected')
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('speaker-connected', true)
       }
     },
     onClose: () => {
-      console.log('🔌 Speaker Deepgram WebSocket closed')
       // Clear audio buffer on close
       speakerAudioBuffer = []
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -98,8 +92,6 @@ function createMicrophoneConnection(apiKey) {
     microphoneConnection.close()
     microphoneConnection = null
   }
-
-  console.log('🎤 Creating microphone Deepgram WebSocket connection (48kHz)')
 
   microphoneConnection = createDeepgramConnection({
     apiKey,
@@ -130,13 +122,11 @@ function createMicrophoneConnection(apiKey) {
       }
     },
     onOpen: () => {
-      console.log('✅ Microphone Deepgram WebSocket connected')
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('microphone-connected', true)
       }
     },
     onClose: () => {
-      console.log('🔌 Microphone Deepgram WebSocket closed')
       microphoneAudioBuffer = []
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('microphone-connected', false)
@@ -198,11 +188,10 @@ ipcMain.handle('start-speaker-capture', async (event, apiKey) => {
       try {
         // Always create a fresh instance to avoid state issues
         if (nativeAudioCapture) {
-          console.log('⚠️ Cleaning up existing native audio capture instance...')
           try {
             nativeAudioCapture.stop()
           } catch (e) {
-            console.log('⚠️ Error stopping existing instance:', e.message)
+            //
           }
           nativeAudioCapture = null
           // Small delay to ensure cleanup
@@ -211,7 +200,6 @@ ipcMain.handle('start-speaker-capture', async (event, apiKey) => {
 
         let audioSampleCount = 0
 
-        console.log('🎙️ Creating new native audio capture instance...')
         nativeAudioCapture = new NativeAudioCapture((audioBuffer) => {
           // audioBuffer is a Node Buffer of float32 PCM from native
           // Reinterpret bytes as Float32Array without copying per-element
@@ -261,22 +249,8 @@ ipcMain.handle('start-speaker-capture', async (event, apiKey) => {
             normalizedData[i] = Math.max(-1, Math.min(1, floatData[i] * maxSafeGain))
           }
 
-          // Calculate RMS for audio validation (after normalization)
-          let normalizedSumSquares = 0
-          for (let i = 0; i < normalizedData.length; i++) {
-            normalizedSumSquares += normalizedData[i] * normalizedData[i]
-          }
-          const normalizedRms = Math.sqrt(normalizedSumSquares / normalizedData.length) || 0
-
           // Log first few samples for debugging
           if (audioSampleCount < 3) {
-            console.log(
-              `📊 Audio sample ${audioSampleCount}: ${
-                normalizedData.length
-              } samples, original_rms≈${rms.toFixed(4)}, normalized_rms≈${normalizedRms.toFixed(
-                4
-              )}, peak≈${peak.toFixed(4)}, gain≈${maxSafeGain.toFixed(2)}x`
-            )
             audioSampleCount++
           }
 
@@ -286,7 +260,6 @@ ipcMain.handle('start-speaker-capture', async (event, apiKey) => {
 
             // Flush any buffered audio chunks (Deepgram handles silence automatically)
             if (speakerAudioBuffer.length > 0) {
-              console.log(`📤 Flushing ${speakerAudioBuffer.length} buffered audio chunks`)
               speakerAudioBuffer.forEach((bufferedData) => {
                 speakerConnection.send(bufferedData)
               })
@@ -306,17 +279,14 @@ ipcMain.handle('start-speaker-capture', async (event, apiKey) => {
 
         const result = nativeAudioCapture.start()
         if (result.success) {
-          console.log('✅ Native macOS audio capture started')
           mainWindow.webContents.send('native-audio-started', true)
         } else {
-          console.log('⚠️ Native audio capture failed')
           mainWindow.webContents.send(
             'speaker-error',
             'Native audio capture failed. Please check Screen Recording permissions in System Preferences.'
           )
         }
       } catch (error) {
-        console.log('⚠️ Native audio capture error:', error.message)
         // Continue with web API fallback
       }
     }
@@ -328,13 +298,10 @@ ipcMain.handle('start-speaker-capture', async (event, apiKey) => {
 })
 
 ipcMain.handle('stop-speaker-capture', async () => {
-  console.log('🛑 Stopping speaker capture...')
-
   // Stop native audio capture if running
   if (nativeAudioCapture) {
     try {
-      const stopResult = nativeAudioCapture.stop()
-      console.log('✅ Native audio capture stopped:', stopResult)
+      nativeAudioCapture.stop()
     } catch (error) {
       console.error('❌ Error stopping native audio capture:', error.message)
     }
@@ -350,13 +317,11 @@ ipcMain.handle('stop-speaker-capture', async () => {
   if (speakerConnection) {
     speakerConnection.close()
     speakerConnection = null
-    console.log('✅ Speaker Deepgram connection closed')
   }
 
   // Clear audio buffer
   speakerAudioBuffer = []
 
-  console.log('✅ Speaker capture stopped successfully')
   return { success: true }
 })
 
@@ -374,17 +339,13 @@ ipcMain.handle('start-microphone-deepgram', async (event, apiKey) => {
 })
 
 ipcMain.handle('stop-microphone-deepgram', async () => {
-  console.log('🛑 Stopping microphone Deepgram connection...')
-
   if (microphoneConnection) {
     microphoneConnection.close()
     microphoneConnection = null
-    console.log('✅ Microphone Deepgram connection closed')
   }
 
   microphoneAudioBuffer = []
 
-  console.log('✅ Microphone Deepgram stopped successfully')
   return { success: true }
 })
 
@@ -416,9 +377,6 @@ ipcMain.handle('send-audio-data', async (event, audioData, source) => {
 
         // Flush buffered audio if any
         if (microphoneAudioBuffer.length > 0) {
-          console.log(
-            `📤 Flushing ${microphoneAudioBuffer.length} buffered microphone audio chunks`
-          )
           microphoneAudioBuffer.forEach((bufferedData) => {
             microphoneConnection.send(bufferedData)
           })

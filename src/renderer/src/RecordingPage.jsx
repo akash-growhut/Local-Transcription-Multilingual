@@ -125,8 +125,6 @@ const RecordingPage = () => {
 
   // Function to display transcripts in sequential order
   const displaySequentialTranscripts = useCallback(() => {
-    console.log(`🔍 [displaySequentialTranscripts] Starting...`)
-
     const newMessages = []
 
     // Keep displaying transcripts while we have any available
@@ -139,15 +137,12 @@ const RecordingPage = () => {
       const transcriptData = speakerTranscripts.current.get(currentIndex)
 
       if (!transcriptData) {
-        console.log(`⚠️ Transcript ${currentIndex} exists but has no data`)
         speakerTranscripts.current.delete(currentIndex)
         continue
       }
 
       // Adjust capitalization based on previous transcript
       const adjustedText = adjustCapitalization(transcriptData.text, lastDisplayedText.current)
-
-      console.log(`✅ Displaying transcript ${currentIndex}: "${adjustedText}"`)
 
       // Add message to state
       newMessages.push({
@@ -165,50 +160,28 @@ const RecordingPage = () => {
 
       // Remove from map after displaying
       speakerTranscripts.current.delete(currentIndex)
-      console.log(`🗑️ Removed transcript ${currentIndex} from queue`)
     }
 
     // Update messages state if we have new messages
     if (newMessages.length > 0) {
       setMessages((prev) => [...prev, ...newMessages])
-      console.log(`📜 Displayed all available transcripts`)
-    } else {
-      console.log(`ℹ️ No new transcripts to display`)
     }
   }, [])
 
   const displayTranscript = useCallback(
     (text, isFinal, source, eventData = null) => {
-      console.log(`🎯 [displayTranscript] Called with:`, {
-        text,
-        isFinal,
-        source,
-        eventData
-      })
-
       // Handle file-based transcripts (from MP3 transcription)
       if (source === 'speaker' && eventData && eventData.fileIndex !== undefined) {
         const fileIndex = eventData.fileIndex
-        console.log(`📝 Received file-based transcript ${fileIndex}: "${text}"`)
         speakerTranscripts.current.set(fileIndex, {
           text: text,
           timestamp: eventData.timestamp || Date.now()
         })
 
-        console.log(
-          `📊 Stored transcripts (queue):`,
-          Array.from(speakerTranscripts.current.keys()).sort((a, b) => a - b)
-        )
-
         // Display transcripts in sequential order
         displaySequentialTranscripts()
         return
       }
-
-      // Handle live/streaming transcripts (no fileIndex)
-      console.log(
-        `📝 Received live ${source} transcript (${isFinal ? 'FINAL' : 'interim'}): "${text}"`
-      )
 
       if (isFinal) {
         // Add final transcript as a message
@@ -274,12 +247,9 @@ const RecordingPage = () => {
 
   // Helper function to start Deepgram connection for microphone via IPC
   const startMicrophoneDeepgram = useCallback(async (apiKey) => {
-    console.log('🔊 [MIC Deepgram] Starting microphone Deepgram connection via IPC...')
     try {
       const result = await window.electronAPI?.startMicrophoneDeepgram(apiKey)
-      if (result?.success) {
-        console.log('✅ [MIC Deepgram] Microphone Deepgram connection started')
-      } else {
+      if (!result?.success) {
         console.error('❌ [MIC Deepgram] Failed to start connection:', result?.error)
         setMicStatus({ text: 'Deepgram Error', className: 'error' })
       }
@@ -314,7 +284,6 @@ const RecordingPage = () => {
     }
 
     const audioStream = new MediaStream([audioTrack])
-    console.log('💾 [AUDIO TEST] Created MediaStream from audio track:', audioStream)
 
     // Check if MediaRecorder is supported
     if (!MediaRecorder.isTypeSupported('audio/webm')) {
@@ -357,13 +326,10 @@ const RecordingPage = () => {
         // Clean up
         URL.revokeObjectURL(url)
         chunks.length = 0
-
-        console.log(`💾 [AUDIO TEST] Saved 5-second audio chunk ${chunkCounter}`)
       }
 
       // Start recording
       mediaRecorder.start()
-      console.log('💾 [AUDIO TEST] Started recording audio chunks (5-second intervals)')
 
       // Function to stop and restart recording every 5 seconds
       const recordChunk = () => {
@@ -392,7 +358,6 @@ const RecordingPage = () => {
         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
           mediaRecorder.stop()
         }
-        console.log('💾 [AUDIO TEST] Stopped recording audio chunks')
       }
 
       // Store cleanup function in ref
@@ -405,24 +370,18 @@ const RecordingPage = () => {
   // Helper function to process audio from MediaStreamTrack and send to Deepgram
   const processAudioTrackForDeepgram = useCallback(
     (audioTrack, sampleRate = 48000) => {
-      console.log({ audioTrack, sampleRate })
-      console.log(`🔊 [MIC Audio] Processing audio track with sample rate: ${sampleRate}Hz`)
-
       // Clean up previous audio context and processor if they exist
       if (liveKitAudioProcessor.current) {
-        console.log('🔊 [MIC Audio] Cleaning up previous audio processor')
         liveKitAudioProcessor.current.disconnect()
         liveKitAudioProcessor.current = null
       }
       if (liveKitAudioContext.current) {
-        console.log('🔊 [MIC Audio] Closing previous audio context')
         liveKitAudioContext.current.close().catch(console.error)
         liveKitAudioContext.current = null
       }
 
       // Start Deepgram connection via IPC if we have API key
       if (deepgramApiKey) {
-        console.log('🔊 [MIC Deepgram] Starting Deepgram connection via IPC...')
         startMicrophoneDeepgram(deepgramApiKey)
       } else {
         console.warn('⚠️ [MIC Deepgram] No Deepgram API key available')
@@ -432,31 +391,18 @@ const RecordingPage = () => {
       startAudioRecording(audioTrack)
 
       // Create new AudioContext
-      console.log(`🔊 [MIC Audio] Creating AudioContext at ${sampleRate}Hz`)
+
       liveKitAudioContext.current = new AudioContext({ sampleRate })
       const source = liveKitAudioContext.current.createMediaStreamSource(
         new MediaStream([audioTrack])
       )
-      console.log('🔊 [MIC Audio] AudioContext and source created')
 
       // Create ScriptProcessorNode to capture audio data
       liveKitAudioProcessor.current = liveKitAudioContext.current.createScriptProcessor(4096, 1, 1)
 
-      let chunkCount = 0
       liveKitAudioProcessor.current.onaudioprocess = (e) => {
         if (!isMicrophoneMutedRef.current) {
           const inputData = e.inputBuffer.getChannelData(0)
-
-          // Log first few chunks for debugging
-          if (chunkCount < 3) {
-            const rms = Math.sqrt(
-              inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length
-            )
-            console.log(
-              `🔊 [MIC Audio] Chunk ${chunkCount}: ${inputData.length} samples, RMS: ${rms.toFixed(4)}`
-            )
-            chunkCount++
-          }
 
           // Convert Float32Array to Int16Array
           const int16Array = new Int16Array(inputData.length)
@@ -472,7 +418,6 @@ const RecordingPage = () => {
 
       source.connect(liveKitAudioProcessor.current)
       liveKitAudioProcessor.current.connect(liveKitAudioContext.current.destination)
-      console.log('🔊 [MIC Audio] Audio processing pipeline connected')
     },
     [deepgramApiKey, startMicrophoneDeepgram, sendAudioToDeepgram, startAudioRecording]
   )
@@ -502,7 +447,6 @@ const RecordingPage = () => {
 
     // Setup event listeners
     const unsubscribeTranscript = window.electronAPI?.onTranscript((data) => {
-      console.log('📨 [RENDERER] Received transcript event from main process:', data)
       displayTranscript(data.text, data.isFinal, data.source, data)
     })
 
@@ -520,7 +464,6 @@ const RecordingPage = () => {
 
     const unsubscribeMicrophoneConnected = window.electronAPI?.onMicrophoneConnected(
       (connected) => {
-        console.log('🔊 [MIC Deepgram] Connection status:', connected)
         setMicStatus({
           text: connected ? 'Recording' : 'Ready',
           className: connected ? 'recording' : ''
@@ -661,13 +604,7 @@ const RecordingPage = () => {
 
         // Set up event handler for local track published (must be before connecting)
         room.on(RoomEvent.LocalTrackPublished, async (trackPublication) => {
-          console.log(
-            '🔊 [LiveKit] ALL localTrackPublished event fired at',
-            new Date().toISOString()
-          )
           if (trackPublication.track?.kind === 'audio') {
-            console.log('🔊 [LiveKit] localTrackPublished event fired at', new Date().toISOString())
-            console.log('🔊 [LiveKit] Track publication:', trackPublication)
             try {
               if (!isKrispNoiseFilterSupported()) {
                 console.warn('Krisp noise filter is currently not supported on this browser')
@@ -676,7 +613,7 @@ const RecordingPage = () => {
                 if (processedAudioTrack) {
                   const settings = processedAudioTrack.getSettings()
                   const sampleRate = settings.sampleRate || 48000
-                  console.log('processAudioTrackForDeepgram: 1')
+
                   processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                   setMicStatus({ text: 'Recording', className: 'recording' })
                 }
@@ -693,7 +630,7 @@ const RecordingPage = () => {
                 if (processedAudioTrack) {
                   const settings = processedAudioTrack.getSettings()
                   const sampleRate = settings.sampleRate || 48000
-                  console.log('processAudioTrackForDeepgram: 2')
+
                   processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                   setMicStatus({ text: 'Recording', className: 'recording' })
                 }
@@ -707,7 +644,7 @@ const RecordingPage = () => {
               }
 
               // Once instantiated, the filter will begin initializing and will download additional resources
-              console.log('🔊 [Krisp] Creating Krisp noise filter processor...')
+
               const krispProcessor = KrispNoiseFilter()
               liveKitKrispProcessor.current = krispProcessor
 
@@ -719,32 +656,24 @@ const RecordingPage = () => {
                 if (processedAudioTrack) {
                   const settings = processedAudioTrack.getSettings()
                   const sampleRate = settings.sampleRate || 48000
-                  console.log('processAudioTrackForDeepgram: 3')
+
                   processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                   setMicStatus({ text: 'Recording', className: 'recording' })
                 }
                 return
               }
 
-              console.log('🔊 [Krisp] Setting processor on track...')
               await trackPublication.track?.setProcessor(krispProcessor)
 
               // To enable/disable the noise filter, use setEnabled()
-              console.log('🔊 [Krisp] Enabling Krisp noise filter...')
+
               await krispProcessor.setEnabled(true)
-              console.log('✅ [Krisp] Krisp noise filter enabled')
 
               // Wait a bit for processor to initialize and create processedTrack
               await new Promise((resolve) => setTimeout(resolve, 500))
 
               // Check if track is processed
               let processCheck = isTrackProcessed(trackPublication)
-              console.log('🔊 [Krisp] Process check:', {
-                isProcessed: processCheck.isProcessed,
-                hasProcessor: processCheck.hasProcessor,
-                processorType: processCheck.processorType,
-                processedTrackAvailable: !!processCheck.processor?.processedTrack
-              })
 
               if (!processCheck.isProcessed) {
                 console.warn('⚠️ [Krisp] Track does not appear to be processed yet, waiting...')
@@ -753,12 +682,6 @@ const RecordingPage = () => {
 
                 // Check again
                 processCheck = isTrackProcessed(trackPublication)
-                console.log('🔊 [Krisp] Process check (retry):', {
-                  isProcessed: processCheck.isProcessed,
-                  hasProcessor: processCheck.hasProcessor,
-                  processorType: processCheck.processorType,
-                  processedTrackAvailable: !!processCheck.processor?.processedTrack
-                })
               }
 
               // Get the processed track - mediaStreamTrack getter returns processor.processedTrack if available
@@ -766,18 +689,7 @@ const RecordingPage = () => {
               if (processedAudioTrack) {
                 const settings = processedAudioTrack.getSettings()
                 const sampleRate = settings.sampleRate || 48000
-                console.log(
-                  `🔊 [Krisp] Using ${processCheck.isProcessed ? 'PROCESSED' : 'original'} audio track`
-                )
-                console.log(`🔊 [Krisp] Processed audio track sample rate: ${sampleRate}Hz`)
-                console.log('🔊 [Krisp] Track settings:', {
-                  echoCancellation: settings.echoCancellation,
-                  noiseSuppression: settings.noiseSuppression,
-                  autoGainControl: settings.autoGainControl,
-                  trackId: processedAudioTrack.id,
-                  trackLabel: processedAudioTrack.label
-                })
-                console.log('processAudioTrackForDeepgram: 4')
+
                 processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                 setMicStatus({ text: 'Recording', className: 'recording' })
               } else {
@@ -790,7 +702,7 @@ const RecordingPage = () => {
               if (processedAudioTrack) {
                 const settings = processedAudioTrack.getSettings()
                 const sampleRate = settings.sampleRate || 48000
-                console.log('processAudioTrackForDeepgram: 5')
+
                 processAudioTrackForDeepgram(processedAudioTrack, sampleRate)
                 setMicStatus({ text: 'Recording', className: 'recording' })
               }
@@ -800,11 +712,10 @@ const RecordingPage = () => {
 
         // Connect to room first
         await room.connect(tokenResult.wssUrl, tokenResult.token)
-        console.log('✅ Connected to LiveKit room')
 
         // Get user media with echo cancellation and noise suppression constraints
         // This ensures browser-level audio processing before LiveKit/Krisp processing
-        console.log('🎤 Getting user media with audio constraints...')
+
         const userMediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
@@ -818,18 +729,11 @@ const RecordingPage = () => {
           throw new Error('Failed to get audio track from getUserMedia')
         }
 
-        console.log('🎤 Audio track obtained with constraints:', {
-          echoCancellation: audioTrack.getSettings().echoCancellation,
-          noiseSuppression: audioTrack.getSettings().noiseSuppression,
-          autoGainControl: audioTrack.getSettings().autoGainControl
-        })
-
         // Publish the track to LiveKit (this will trigger LocalTrackPublished event)
         await room.localParticipant.publishTrack(audioTrack, {
           source: Track.Source.Microphone,
           name: 'microphone'
         })
-        console.log('✅ Microphone track published to LiveKit')
       } catch (error) {
         console.error('Error starting microphone with LiveKit:', error)
         setMicStatus({ text: 'Error', className: 'error' })
@@ -856,9 +760,6 @@ const RecordingPage = () => {
           // Native capture is handled entirely in main process
           // Audio flows: ScreenCaptureKit → native module → main.js → Deepgram
           // Status will be updated via onSpeakerConnected event when WebSocket is ready
-          console.log(
-            '✅ Native speaker capture started in Electron (using speaker_audio_capture.mm)'
-          )
         }
       } else {
         // Browser fallback not supported - LiveKit is required
@@ -900,7 +801,6 @@ const RecordingPage = () => {
           liveKitRoom.current.localParticipant.setMicrophoneEnabled(false)
           // Disconnect from room
           await liveKitRoom.current.disconnect()
-          console.log('✅ Disconnected from LiveKit room')
         } catch (error) {
           console.error('Error disconnecting from LiveKit:', error)
         }
@@ -966,11 +866,11 @@ const RecordingPage = () => {
     // Update status
     if (newMutedState) {
       setMicStatus({ text: 'Muted', className: 'error' })
-      console.log('🔇 Microphone muted')
+
       addSystemMessage('🔇 Microphone muted - not transcribing')
     } else {
       setMicStatus({ text: 'Recording', className: 'recording' })
-      console.log('🎤 Microphone unmuted')
+
       addSystemMessage('🎤 Microphone unmuted - transcribing resumed')
     }
   }

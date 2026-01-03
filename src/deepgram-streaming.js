@@ -57,8 +57,7 @@ function createDeepgramConnection(config) {
     onTranscript,
     onError,
     onOpen,
-    onClose,
-    type
+    onClose
   } = config
 
   if (!apiKey) {
@@ -80,13 +79,6 @@ function createDeepgramConnection(config) {
 
   const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`
 
-  console.log(`📡 Creating Deepgram WebSocket connection:`)
-  console.log(`   Model: ${model}`)
-  console.log(`   Language: ${language}`)
-  console.log(`   Sample Rate: ${sampleRate}Hz`)
-  console.log(`   Channels: ${channels}`)
-  console.log(`   Interim Results: ${interimResults}`)
-
   // Create WebSocket connection
   const ws = new WebSocket(wsUrl, {
     headers: {
@@ -99,7 +91,6 @@ function createDeepgramConnection(config) {
 
   // WebSocket event handlers
   ws.on('open', () => {
-    console.log('✅ Deepgram WebSocket connected')
     isConnected = true
     if (onOpen) onOpen()
   })
@@ -110,7 +101,6 @@ function createDeepgramConnection(config) {
   })
 
   ws.on('close', () => {
-    console.log('🔌 Deepgram WebSocket closed')
     isConnected = false
     if (onClose) onClose()
   })
@@ -134,12 +124,10 @@ function createDeepgramConnection(config) {
 
       if (isFinal) {
         // ✅ COMMIT FINAL TEXT
-        console.log(`💬 FINAL (${type}): "${transcript}"`)
         lastFinalTranscript += transcript + ' '
         if (onTranscript) onTranscript(transcript, true, words)
       } else {
         // ⚠️ INTERIM (do not persist)
-        // console.log(`📝 INTERIM (${type}): "${transcript}"`);
         if (onTranscript) onTranscript(transcript, false, words)
       }
     } catch (error) {
@@ -196,7 +184,6 @@ function createDeepgramConnection(config) {
           ws.send(JSON.stringify({ type: 'CloseStream' }))
           // Close the WebSocket
           ws.close()
-          console.log('🛑 Deepgram connection closed gracefully')
         } catch (error) {
           console.error('❌ Error closing connection:', error)
           ws.close()
