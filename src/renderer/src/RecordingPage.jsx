@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Room, RoomEvent, Track } from 'livekit-client'
+import { AudioPresets, Room, RoomEvent, Track } from 'livekit-client'
 import { KrispNoiseFilter, isKrispNoiseFilterSupported } from '@livekit/krisp-noise-filter'
 import muteMicIcon from './assets/svg/muteMic.svg'
 import saveKeyIcon from './assets/svg/savekey.svg'
@@ -586,17 +586,20 @@ const RecordingPage = () => {
       try {
         // Generate access token for LiveKit from main process
         const participantIdentity = `user-${Date.now()}`
-        const tokenResult = await window.electronAPI?.generateLiveKitToken(
-          'recording-room',
-          participantIdentity,
-          'Recording User'
+        const tokenApi = await fetch(
+          `http://localhost:8000/api/livekit/generate-token?participantName=ng&roomCode=3342432323&participantIdentity=${participantIdentity}`
         )
+        const tokenResult = await tokenApi.json()
 
-        if (!tokenResult?.success || !tokenResult.token || !tokenResult.wssUrl) {
+        if (!tokenResult?.data) {
           throw new Error(
             tokenResult?.error || 'Failed to generate LiveKit token. Please check your .env file.'
           )
         }
+
+        const base64DecodedData = JSON.parse(atob(tokenResult?.data))
+        const token = base64DecodedData?.token
+        const wssUrl = base64DecodedData?.serverUrl
 
         // Create and connect to LiveKit room
         const room = new Room()
@@ -645,7 +648,10 @@ const RecordingPage = () => {
 
               // Once instantiated, the filter will begin initializing and will download additional resources
 
-              const krispProcessor = KrispNoiseFilter()
+              const krispProcessor = KrispNoiseFilter({
+                debugLogs: true,
+                quality: 'high'
+              })
               liveKitKrispProcessor.current = krispProcessor
 
               // Check if the processor was created successfully
@@ -711,7 +717,7 @@ const RecordingPage = () => {
         })
 
         // Connect to room first
-        await room.connect(tokenResult.wssUrl, tokenResult.token)
+        await room.connect(wssUrl, token)
 
         // Get user media with echo cancellation and noise suppression constraints
         // This ensures browser-level audio processing before LiveKit/Krisp processing
@@ -732,7 +738,10 @@ const RecordingPage = () => {
         // Publish the track to LiveKit (this will trigger LocalTrackPublished event)
         await room.localParticipant.publishTrack(audioTrack, {
           source: Track.Source.Microphone,
-          name: 'microphone'
+          name: 'microphone',
+          audioPreset: AudioPresets.musicHighQualityStereo,
+          red: true,
+          dtx: true
         })
       } catch (error) {
         console.error('Error starting microphone with LiveKit:', error)
